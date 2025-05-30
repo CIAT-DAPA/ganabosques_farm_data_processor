@@ -133,10 +133,10 @@ def get_data_sagari(path_input, output_file):
 
     # Guardar archivo final
     print(f"Guardando archivo combinado en: {output_file}")
-    output_path = os.path.join(output_file, "01_tmp_get_data_sagari")
-    os.makedirs(output_path, exist_ok=True)
+    #output_path = os.path.join(output_file, "01_tmp_get_data_sagari")
+    os.makedirs(output_file, exist_ok=True)
 
-    df_final.to_csv(os.path.join(output_path, "sagari_completo.csv"), index=False)
+    df_final.to_csv(os.path.join(output_file, "sagari_completo.csv"), index=False)
     print("✅ Proceso completado.")
 
 # Ejemplo de uso

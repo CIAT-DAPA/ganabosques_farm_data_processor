@@ -102,11 +102,11 @@ def quality_control_coordinates(input_path, path_output, workspace, url_geoserve
     print(f"🧹 Registros eliminados por IDs incompletos: {total_antes - total_despues}")
 
     # Crear carpeta de salida
-    carpeta_salida = os.path.join(path_output, "02_tmp_quality_control_coordinates")
-    os.makedirs(carpeta_salida, exist_ok=True)
+    #carpeta_salida = os.path.join(path_output, "02_tmp_quality_control_coordinates")
+    os.makedirs(path_output, exist_ok=True)
 
     # Guardar archivo
-    output_file = os.path.join(carpeta_salida, os.path.basename(ruta_csv))
+    output_file = os.path.join(path_output, os.path.basename(ruta_csv))
     df_final.to_csv(output_file, index=False, encoding='utf-8')
     print(f"💾 Archivo final guardado en: {output_file}")
 

@@ -69,15 +69,15 @@ def buffer(path_input, path_equiv, path_output):
         gdf = gdf.drop(columns=["ugg_ha"])
 
     # Crear carpeta para los buffers
-    carpeta_buffers = os.path.join(path_output, "03_tmp_polygons_buffers")
-    os.makedirs(carpeta_buffers, exist_ok=True)
+    carpeta_buffers = os.path.join(path_output, "buffers")
+    os.makedirs(path_output, exist_ok=True)
 
     # Crear carpeta para guardar el DataFrame
-    carpeta_df = os.path.join(path_output, "03_tmp_polygons_buffers_data_frame")
-    os.makedirs(carpeta_df, exist_ok=True)
+    #carpeta_df = os.path.join(path_output, "03_tmp_polygons_buffers_data_frame")
+    os.makedirs(path_output, exist_ok=True)
 
     # ✅ Guardar tabla sin geometría
-    path_csv = os.path.join(carpeta_df, "sagari_completa_final.csv")
+    path_csv = os.path.join(path_output, "sagari_completa_final.csv")
     gdf.drop(columns="geometry").to_csv(path_csv, index=False)
     print(f"✅ Tabla guardada en: {path_csv}")
 
