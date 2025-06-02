@@ -111,7 +111,7 @@ def quality_control_coordinates(input_path, path_output, workspace, url_geoserve
     print(f"💾 Archivo final guardado en: {output_file}")
 
 # Ejemplo de uso
-quality_control_coordinates(
+""" quality_control_coordinates(
         input_path=r"D:\OneDrive - CGIAR\Desktop\ganabosques\farms\tmp\01_tmp_get_data_sagari",
         path_output=r"D:\OneDrive - CGIAR\Desktop\ganabosques\farms\tmp",
         workspace="administrative",
@@ -119,4 +119,4 @@ quality_control_coordinates(
         store="divipola",
         user = "admin" ,
         password= "geoserver"
-)
+) """

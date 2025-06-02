@@ -68,13 +68,13 @@ def buffer(path_input, path_equiv, path_output):
     if "ugg_ha" in gdf.columns:
         gdf = gdf.drop(columns=["ugg_ha"])
 
-    # Crear carpeta para los buffers
-    carpeta_buffers = os.path.join(path_output, "buffers")
-    os.makedirs(path_output, exist_ok=True)
-
     # Crear carpeta para guardar el DataFrame
     #carpeta_df = os.path.join(path_output, "03_tmp_polygons_buffers_data_frame")
     os.makedirs(path_output, exist_ok=True)
+
+    # Crear carpeta para los buffers
+    carpeta_buffers = os.path.join(path_output, "buffers")
+    os.makedirs(carpeta_buffers, exist_ok=True)
 
     # ✅ Guardar tabla sin geometría
     path_csv = os.path.join(path_output, "sagari_completa_final.csv")
@@ -93,8 +93,3 @@ def buffer(path_input, path_equiv, path_output):
             print(f"Error en fila {idx} con CODIGO_SIT {row['CODIGO_SIT']}: {e}")
 
 # Ejecutar función
-buffer(
-    path_input=r"D:\OneDrive - CGIAR\Desktop\ganabosques\farms\tmp\02_tmp_quality_control_coordinates",
-    path_equiv=r"D:\OneDrive - CGIAR\Desktop\ganabosques\farms\input\UGG\equivalencias_UGG_dep.csv",
-    path_output=r"D:\OneDrive - CGIAR\Desktop\ganabosques\farms\tmp"
-)

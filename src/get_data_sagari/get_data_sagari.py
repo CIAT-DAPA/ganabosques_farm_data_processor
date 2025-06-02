@@ -140,7 +140,7 @@ def get_data_sagari(path_input, output_file):
     print("✅ Proceso completado.")
 
 # Ejemplo de uso
-get_data_sagari(
+""" get_data_sagari(
     path_input=r"D:\OneDrive - CGIAR\Desktop\ganabosques\farms\input\sagari\brutos",
     output_file=r"D:\OneDrive - CGIAR\Desktop\ganabosques\farms\tmp"
-)
+) """
