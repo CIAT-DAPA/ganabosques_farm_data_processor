@@ -18,6 +18,9 @@ def quality_control_coordinates(input_path, path_output, workspace, url_geoserve
     ruta_csv = os.path.join(input_path, csv_files[0])
     print("📄 CSV cargado:", ruta_csv)
 
+    # Crear carpeta de salida si no existe
+    os.makedirs(path_output, exist_ok=True)
+
     # Construir URL del shapefile
     url_shp = f"{url_geoserver}{workspace}/wfs?service=WFS&version=1.0.0&request=GetFeature&typeName={workspace}:{store}&outputFormat=shape-zip"
     print("🌐 Solicitando shapefile desde:", url_shp)
@@ -25,8 +28,9 @@ def quality_control_coordinates(input_path, path_output, workspace, url_geoserve
     response = requests.get(url_shp, auth=(user, password))
 
     if response.ok:
+        # Extraer shapefile dentro de la carpeta de salida
         with zipfile.ZipFile(io.BytesIO(response.content)) as z:
-            z.extractall("divipola_shapefile")
+            z.extractall(path_output)
         print("✅ Shapefile descargado y extraído con éxito.")
     else:
         print("❌ Error al descargar shapefile:", response.status_code)
@@ -34,6 +38,7 @@ def quality_control_coordinates(input_path, path_output, workspace, url_geoserve
 
     # Cargar CSV
     df = pd.read_csv(ruta_csv)
+
     # Eliminar coordenadas faltantes
     total_original = df.shape[0]
     df = df.dropna(subset=['LONGITUD', 'LATITUD'])
@@ -44,12 +49,12 @@ def quality_control_coordinates(input_path, path_output, workspace, url_geoserve
     geometry = [Point(xy) for xy in zip(df['LONGITUD'], df['LATITUD'])]
     gdf_puntos = gpd.GeoDataFrame(df.copy(), geometry=geometry, crs="EPSG:4326")
 
-    # Cargar shapefile local
-    shp_path = [f for f in os.listdir("divipola_shapefile") if f.endswith(".shp")]
+    # Buscar y cargar shapefile extraído
+    shp_path = [f for f in os.listdir(path_output) if f.endswith(".shp")]
     if not shp_path:
         print("❌ No se encontró shapefile dentro del zip.")
         return
-    ruta_shp = os.path.join("divipola_shapefile", shp_path[0])
+    ruta_shp = os.path.join(path_output, shp_path[0])
     gdf_veredas = gpd.read_file(ruta_shp)
     gdf_veredas = gdf_veredas.to_crs("EPSG:4326")
     print("📍 Shapefile cargado y CRS transformado a EPSG:4326.")
@@ -80,13 +85,7 @@ def quality_control_coordinates(input_path, path_output, workspace, url_geoserve
     total_despues = df_final.shape[0]
     print(f"🧹 Registros eliminados por IDs incompletos: {total_antes - total_despues}")
 
-    # Crear carpeta de salida
-    os.makedirs(path_output, exist_ok=True)
-
-    # Guardar archivo
+    # Guardar archivo final
     output_file = os.path.join(path_output, os.path.basename(ruta_csv))
     df_final.to_csv(output_file, index=False, encoding='utf-8')
     print(f"💾 Archivo final guardado en: {output_file}")
-
-
-
