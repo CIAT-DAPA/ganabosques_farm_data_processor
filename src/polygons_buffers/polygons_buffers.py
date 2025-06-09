@@ -8,8 +8,11 @@ from ganabosques_orm.enums.ugg import UGG
 from ganabosques_orm.enums.farmsource import FarmSource
 from config import config
 from ganabosques_orm.enums.source import Source
+from mongoengine import connect
+from ganabosques_orm.collections.adm1 import Adm1  # Asegúrate de que Adm1 esté bien importado
 
-def buffer(path_input, path_equiv, path_output):
+
+def buffer(path_input, path_output,source):
     # Cargar CSV principal
     csv_files = [f for f in os.listdir(path_input) if f.endswith(".csv")]
     if not csv_files:
@@ -18,11 +21,6 @@ def buffer(path_input, path_equiv, path_output):
     ruta_csv = os.path.join(path_input, csv_files[0])
     print("📄 CSV cargado:", ruta_csv)
     df = pd.read_csv(ruta_csv)
-
-    # Obtener columnas de asignación
-    asignaciones_dict = generar_agg_sagari(df)
-    asignaciones = list(asignaciones_dict.keys())
-    print("\n✅ Asignaciones utilizadas:", asignaciones)
 
     # Pesos UGG
     G1 = config["UGG_GRUPOS"]["G1"]
@@ -34,36 +32,38 @@ def buffer(path_input, path_equiv, path_output):
 
     # Cálculo de BOV_UGG y BUF_UGG
     df["BOV_UGG"] = (
-        G1 * df[asignaciones[0]] + #TERNEROS_MENORES_1_ANIO_BOVINOS
-        G2 * df[asignaciones[2]] + #HEMBRAS_MACHOS_1_2_ANIOS_BOVINOS
-        G3 * df[asignaciones[4]] + #HEMBRAS_MENORES_2_3_ANIOS_BOVINOS
-        G4 * df[asignaciones[6]] + #MACHOS_2_3_ANIOS_BOVINOS
-        G5 * df[asignaciones[8]] + #HEMBRAS_MAYORES_3_ANIOS_BOVINOS
-        G6 * df[asignaciones[10]]  #MACHOS_MAYORES_3_ANIOS_BOVINOS
+        G1 * df[f"{UGG.TERNEROS_MENORES_1_ANIO.value}_{Species.BOVINOS.value}"] + #TERNEROS_MENORES_1_ANIO_BOVINOS
+        G2 * df[f"{UGG.HEMBRAS_MACHOS_1_2_ANIOS.value}_{Species.BOVINOS.value}"] + #HEMBRAS_MACHOS_1_2_ANIOS_BOVINOS
+        G3 * df[f"{UGG.HEMBRAS_MENORES_2_3_ANIOS.value}_{Species.BOVINOS.value}"] + #HEMBRAS_MENORES_2_3_ANIOS_BOVINOS
+        G4 * df[f"{UGG.MACHOS_2_3_ANIOS.value}_{Species.BOVINOS.value}"] + #MACHOS_2_3_ANIOS_BOVINOS
+        G5 * df[f"{UGG.HEMBRAS_MAYORES_3_ANIOS.value}_{Species.BOVINOS.value}"] + #HEMBRAS_MAYORES_3_ANIOS_BOVINOS
+        G6 * df[f"{UGG.MACHOS_MAYORES_3_ANIOS.value}_{Species.BOVINOS.value}"]  #MACHOS_MAYORES_3_ANIOS_BOVINOS
     )
 
     df["BUF_UGG"] = (
-        G1 * df[asignaciones[1]] + #TERNEROS_MENORES_1_ANIO_BUFALINOS
-        G2 * df[asignaciones[3]] + #HEMBRAS_MACHOS_1_2_ANIOS_BUFALINOS
-        G3 * df[asignaciones[5]] + #HEMBRAS_MENORES_2_3_ANIOS_BUFALINOS
-        G4 * df[asignaciones[7]] + #MACHOS_2_3_ANIOS_BUFALINOS
-        G5 * df[asignaciones[9]] + #HEMBRAS_MAYORES_3_ANIOS_BUFALINOS
-        G6 * df[asignaciones[11]]  #MACHOS_MAYORES_3_ANIOS_BUFALINOS
+        G1 * df[f"{UGG.TERNEROS_MENORES_1_ANIO.value}_{Species.BUFALINOS.value}"] + #TERNEROS_MENORES_1_ANIO_BUFALINOS
+        G2 * df[f"{UGG.HEMBRAS_MACHOS_1_2_ANIOS.value}_{Species.BUFALINOS.value}"] + #HEMBRAS_MACHOS_1_2_ANIOS_BUFALINOS
+        G3 * df[f"{UGG.HEMBRAS_MENORES_2_3_ANIOS.value}_{Species.BUFALINOS.value}"] + #HEMBRAS_MENORES_2_3_ANIOS_BUFALINOS
+        G4 * df[f"{UGG.MACHOS_2_3_ANIOS.value}_{Species.BUFALINOS.value}"] + #MACHOS_2_3_ANIOS_BUFALINOS
+        G5 * df[f"{UGG.HEMBRAS_MAYORES_3_ANIOS.value}_{Species.BUFALINOS.value}"] + #HEMBRAS_MAYORES_3_ANIOS_BUFALINOS
+        G6 * df[f"{UGG.MACHOS_MAYORES_3_ANIOS.value}_{Species.BUFALINOS.value}"]  #MACHOS_MAYORES_3_ANIOS_BUFALINOS
     )
 
     print("\n🔍 BOV_UGG y BUF_UGG (primeras 5 filas):")
     print(df[["BOV_UGG", "BUF_UGG"]].head())
 
     # Cargar equivalencias
-    ugg = pd.read_csv(path_equiv)
+    connect(db=config['MONGO_DB_NAME'], host=config['MONGO_URI'])
+
+    ugg = [{"codigo_dane": d.ext_id, "ugg_ha": d.ugg_size} for d in Adm1.objects()]
+    ugg = pd.DataFrame(ugg)
+    ugg = ugg.dropna()
+    
     df["adm1"] = df["adm1"].astype(str)
     ugg["codigo_dane"] = ugg["codigo_dane"].astype(str)
-
+    
     df = df.merge(ugg, how="left", left_on="adm1", right_on="codigo_dane")
     df["ugg_equiv_dep"] = df["ugg_ha"]
-
-    print("\n🔍 Equivalencias (primeras 5 filas):")
-    print(df[["adm3", "ugg_equiv_dep"]].head())
 
     # Calcular hectáreas
     df["hectareas"] = (
@@ -102,8 +102,8 @@ def buffer(path_input, path_equiv, path_output):
     os.makedirs(path_output, exist_ok=True)
 
     # Guardar CSV sin geometría
-    path_csv = os.path.join(path_output, "sagari_completa_final.csv")
-    gdf.drop(columns=["geometry", "BOV_UGG", "BUF_UGG", "codigo_dane", "departamento", "ugg_equiv_dep"]).to_csv(path_csv, index=False)
+    path_csv = os.path.join(path_output, f"{source}_completa_final.csv")
+    gdf.drop(columns=["geometry", "BOV_UGG", "BUF_UGG", "codigo_dane", "adm1", "ugg_equiv_dep"]).to_csv(path_csv, index=False)
     print(f"✅ CSV final guardado en: {path_csv}")
 
     # Crear buffers individuales
@@ -120,13 +120,3 @@ def buffer(path_input, path_equiv, path_output):
                 buffer_gdf.to_crs(epsg=4326).to_file(output_file, driver="GeoJSON")
         except Exception as e:
             print(f"⚠️ Error en fila {idx} (SIT_CODE {row[Source.SIT_CODE.value]}): {e}")
-
-def generar_agg_sagari(df):
-    agg_dict = {}
-    for grupo in UGG:
-        for especie in Species:
-            key = f"{grupo.name}_{especie.name}"
-            substrings = [f"AFTOSA_{especie.name}_{suf}" for suf in config[FarmSource.SAGARI.value][grupo]]
-            columnas = [col for col in df if any(substr in col for substr in substrings)]
-            agg_dict[key] = columnas[0] if columnas else None  # Usar solo la primera columna válida
-    return agg_dict
