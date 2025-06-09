@@ -32,21 +32,21 @@ def buffer(path_input, path_output,source):
 
     # Cálculo de BOV_UGG y BUF_UGG
     df["BOV_UGG"] = (
-        G1 * df[f"{UGG.TERNEROS_MENORES_1_ANIO.value}_{Species.BOVINOS.value}"] + #TERNEROS_MENORES_1_ANIO_BOVINOS
-        G2 * df[f"{UGG.HEMBRAS_MACHOS_1_2_ANIOS.value}_{Species.BOVINOS.value}"] + #HEMBRAS_MACHOS_1_2_ANIOS_BOVINOS
-        G3 * df[f"{UGG.HEMBRAS_MENORES_2_3_ANIOS.value}_{Species.BOVINOS.value}"] + #HEMBRAS_MENORES_2_3_ANIOS_BOVINOS
-        G4 * df[f"{UGG.MACHOS_2_3_ANIOS.value}_{Species.BOVINOS.value}"] + #MACHOS_2_3_ANIOS_BOVINOS
-        G5 * df[f"{UGG.HEMBRAS_MAYORES_3_ANIOS.value}_{Species.BOVINOS.value}"] + #HEMBRAS_MAYORES_3_ANIOS_BOVINOS
-        G6 * df[f"{UGG.MACHOS_MAYORES_3_ANIOS.value}_{Species.BOVINOS.value}"]  #MACHOS_MAYORES_3_ANIOS_BOVINOS
+        G1 * df[f"{UGG.TERNEROS_MENORES_1_ANIO.name}_{Species.BOVINOS.name}"] + #TERNEROS_MENORES_1_ANIO_BOVINOS
+        G2 * df[f"{UGG.HEMBRAS_MACHOS_1_2_ANIOS.name}_{Species.BOVINOS.name}"] + #HEMBRAS_MACHOS_1_2_ANIOS_BOVINOS
+        G3 * df[f"{UGG.HEMBRAS_MENORES_2_3_ANIOS.name}_{Species.BOVINOS.name}"] + #HEMBRAS_MENORES_2_3_ANIOS_BOVINOS
+        G4 * df[f"{UGG.MACHOS_2_3_ANIOS.name}_{Species.BOVINOS.name}"] + #MACHOS_2_3_ANIOS_BOVINOS
+        G5 * df[f"{UGG.HEMBRAS_MAYORES_3_ANIOS.name}_{Species.BOVINOS.name}"] + #HEMBRAS_MAYORES_3_ANIOS_BOVINOS
+        G6 * df[f"{UGG.MACHOS_MAYORES_3_ANIOS.name}_{Species.BOVINOS.name}"]  #MACHOS_MAYORES_3_ANIOS_BOVINOS
     )
 
     df["BUF_UGG"] = (
-        G1 * df[f"{UGG.TERNEROS_MENORES_1_ANIO.value}_{Species.BUFALINOS.value}"] + #TERNEROS_MENORES_1_ANIO_BUFALINOS
-        G2 * df[f"{UGG.HEMBRAS_MACHOS_1_2_ANIOS.value}_{Species.BUFALINOS.value}"] + #HEMBRAS_MACHOS_1_2_ANIOS_BUFALINOS
-        G3 * df[f"{UGG.HEMBRAS_MENORES_2_3_ANIOS.value}_{Species.BUFALINOS.value}"] + #HEMBRAS_MENORES_2_3_ANIOS_BUFALINOS
-        G4 * df[f"{UGG.MACHOS_2_3_ANIOS.value}_{Species.BUFALINOS.value}"] + #MACHOS_2_3_ANIOS_BUFALINOS
-        G5 * df[f"{UGG.HEMBRAS_MAYORES_3_ANIOS.value}_{Species.BUFALINOS.value}"] + #HEMBRAS_MAYORES_3_ANIOS_BUFALINOS
-        G6 * df[f"{UGG.MACHOS_MAYORES_3_ANIOS.value}_{Species.BUFALINOS.value}"]  #MACHOS_MAYORES_3_ANIOS_BUFALINOS
+        G1 * df[f"{UGG.TERNEROS_MENORES_1_ANIO.name}_{Species.BUFALINOS.name}"] + #TERNEROS_MENORES_1_ANIO_BUFALINOS
+        G2 * df[f"{UGG.HEMBRAS_MACHOS_1_2_ANIOS.name}_{Species.BUFALINOS.name}"] + #HEMBRAS_MACHOS_1_2_ANIOS_BUFALINOS
+        G3 * df[f"{UGG.HEMBRAS_MENORES_2_3_ANIOS.name}_{Species.BUFALINOS.name}"] + #HEMBRAS_MENORES_2_3_ANIOS_BUFALINOS
+        G4 * df[f"{UGG.MACHOS_2_3_ANIOS.name}_{Species.BUFALINOS.name}"] + #MACHOS_2_3_ANIOS_BUFALINOS
+        G5 * df[f"{UGG.HEMBRAS_MAYORES_3_ANIOS.name}_{Species.BUFALINOS.name}"] + #HEMBRAS_MAYORES_3_ANIOS_BUFALINOS
+        G6 * df[f"{UGG.MACHOS_MAYORES_3_ANIOS.name}_{Species.BUFALINOS.name}"]  #MACHOS_MAYORES_3_ANIOS_BUFALINOS
     )
 
     print("\n🔍 BOV_UGG y BUF_UGG (primeras 5 filas):")
