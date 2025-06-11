@@ -32,10 +32,10 @@ Runs steps 2, 3, and 4.
 
 | Step | Description                              |
 |------|------------------------------------------|
-| 1    | Obtener datos de SAGARI                  |
-| 2    | Validación de calidad de coordenadas     |
-| 3    | Cálculo de buffers geoespaciales         |
-| 4    | Guardar información de predios en MongoDB|
+| 1    | Get data from source                     |
+| 2    | Validation of coordinate quality         |
+| 3    | Calculation of geospatial buffers        |
+| 4    | Save property information in MongoDB     |
 
 #### 📖 Help
 To see help information at any time:
