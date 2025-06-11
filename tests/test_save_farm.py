@@ -78,7 +78,7 @@ def test_adm3_inexistente():
         df_errores = pd.read_csv(error_files[0])
         assert "No se encontró Adm3 con ID NO_EXISTE" in df_errores["error"].values
 
-def test_no_crea_polygon_duplicado():
+def test_not_create_duplicate_polygon():
     Adm3(ext_id="12345").save()
     with tempfile.TemporaryDirectory() as temp_dir:
         csv_path, geojson_folder = create_csv_and_geojson(temp_dir)
@@ -95,7 +95,7 @@ def test_no_crea_polygon_duplicado():
         assert Farm.objects.count() == 1
         assert FarmPolygons.objects.count() == 1
 
-def test_no_crear_farm_duplicado():
+def test_not_create_duplicate_farm():
     Adm3(ext_id="12345").save()
     # Creamos manualmente un farm existente con el código SIT_CODE
     existing_farm = Farm(
@@ -116,7 +116,7 @@ def test_no_crear_farm_duplicado():
         assert Farm.objects.count() == 1
         assert FarmPolygons.objects.count() == 1
 
-def test_actualizar_farm_con_nuevo_codigo_ext():
+def test_updates_farm_with_new_external_code():
     Adm3(ext_id="12345").save()
     # Farm inicial solo con SIT_CODE
     farm = Farm(
@@ -151,18 +151,18 @@ def test_actualizar_farm_con_nuevo_codigo_ext():
         assert Source.GEOFARMER_ID in ext_sources
         assert Farm.objects.count() == 1
 
-def test_generar_ugg_map():
+def test_generate_ugg_map():
     columns = ["TERNEROS_MENORES_1_ANIO_BOVINOS"]
     result = generar_ugg_map(columns)
     assert isinstance(result, dict)
     assert "TERNEROS_MENORES_1_ANIO_BOVINOS" in result
 
-def test_buffers_iguales_true():
+def test_buffers_equal_true():
     buff1 = [BufferPolygon(ugg=UGG.HEMBRAS_MACHOS_1_2_ANIOS, species=Species.BOVINOS, amount=5)]
     buff2 = [BufferPolygon(ugg=UGG.HEMBRAS_MACHOS_1_2_ANIOS, species=Species.BOVINOS, amount=5)]
     assert buffers_iguales(buff1, buff2)
 
-def test_buffers_iguales_false():
+def test_buffers_equal_false():
     buff1 = [BufferPolygon(ugg=UGG.HEMBRAS_MACHOS_1_2_ANIOS, species=Species.BOVINOS, amount=5)]
     buff2 = [BufferPolygon(ugg=UGG.HEMBRAS_MACHOS_1_2_ANIOS, species=Species.BOVINOS, amount=10)]
     assert not buffers_iguales(buff1, buff2)
