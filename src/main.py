@@ -84,7 +84,7 @@ def main(source, selected_steps=None):
 
 if __name__ == "__main__":
 
-    valid_sources = [ FarmSource.GEOFARMER.value, FarmSource.SAGARI.value ]
+    valid_sources = [fs.value for fs in FarmSource]
     parser = argparse.ArgumentParser(
     description=(
         "Pipeline de procesamiento de datos de movilización ganadera.\n\n"
