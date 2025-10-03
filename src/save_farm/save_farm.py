@@ -31,7 +31,7 @@ def process_farm_file(csv_path, geojson_folder, output_path_save, farmsource=Non
     ugg_map = generar_ugg_map(df.columns)
 
     # Columnas a limpiar: códigos externos y administrativos
-    columnas_a_limpiar = [source.value for source in Source] + ['adm1', 'adm2', 'adm3']
+    columnas_a_limpiar = [source.value for source in Source] + ['adm2', 'adm3']
 
     for col in columnas_a_limpiar:
         if col in df.columns:
