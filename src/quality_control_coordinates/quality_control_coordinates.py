@@ -131,3 +131,4 @@ def quality_control_coordinates(input_path, path_output, workspace, url_geoserve
     output_file = os.path.join(path_output, os.path.basename(ruta_csv))
     df_final.to_csv(output_file, index=False, encoding="utf-8")
     print(f"💾 Archivo final guardado en: {output_file}")
+################
