@@ -22,21 +22,25 @@ from ganabosques_orm.auxiliaries.log import Log
 from ganabosques_orm.enums.farmsource import FarmSource
 from ganabosques_orm.enums.source import Source
 from ganabosques_orm.collections.adm3 import Adm3
-from src.config import config
+
+# 👇 importa tu config (elige una de las dos según ejecutes)
+from config import config
+# from src.config import config
+
 from tools.log_print import log_print
-
-# ========= CONFIG =========
-POLYGONS_DIR = r"D:\OneDrive - CGIAR\Desktop\ganabosques\ganabosques_results\03_etl_farms\GEOFARMER\output\poligons"  # GeoJSON en EPSG:3116
-ADM3_SHP_PATH = r"D:\OneDrive - CGIAR\Desktop\ganabosques\ganabosques_results\inputs\shapefiles\adm3\adm3.shp"  # <-- pon aquí tu shapefile ADM3
-OUTPUT_ERRORS_DIR = r"D:\OneDrive - CGIAR\Desktop\ganabosques\ganabosques_results\03_etl_farms\GEOFARMER\errores"
-
-# Nombre de la columna del código ADM3 dentro del shapefile (probamos en orden)
-ADM3_CODE_CANDIDATES = ["ext_id", "cod_ver","ADM3_CODE", "ADM3", "MPIO_CCDGO", "DPTOMPIO", "CODIGO", "CODE"]
 
 # ========= DB & LOG =========
 connect(db=config['MONGO_DB_NAME'], host=config['MONGO_URI'])
 logger = logging.getLogger("GEOFARMER solo polígonos + ADM3")
 logger.setLevel(logging.INFO)
+
+# ========= RUTAS DESDE CONFIG (.env) =========
+POLYGONS_DIR = os.path.normpath(config['GEOFARMER_POLYGONS_DIR'])
+ADM3_SHP_PATH = os.path.normpath(config['ADM3_SHP_PATH'])
+OUTPUT_ERRORS_DIR = os.path.normpath(config['GEOFARMER_ERRORS_DIR'])
+
+# Nombre de la columna del código ADM3 dentro del shapefile (probamos en orden)
+ADM3_CODE_CANDIDATES = ["ext_id", "cod_ver", "ADM3_CODE", "ADM3", "MPIO_CCDGO", "DPTOMPIO", "CODIGO", "CODE"]
 
 # ========= HELPERS =========
 RE_CODE = re.compile(r"(\d+)", re.IGNORECASE)
@@ -75,7 +79,6 @@ def union_geom_3116(geojson_obj):
         except Exception:
             return geom.buffer(0)
     else:
-        # si viene geometry a secas
         try:
             geom = shape(geojson_obj)
             return make_valid(geom)
@@ -97,7 +100,6 @@ def load_adm3_gdf(shp_path: str) -> tuple[gpd.GeoDataFrame, str]:
         raise ValueError("El shapefile ADM3 no tiene CRS; asígnalo antes de usarlo.")
     if gdf.crs.to_epsg() != 3116:
         gdf = gdf.to_crs(epsg=3116)
-    # Detectar columna código
     code_col = None
     for cand in ADM3_CODE_CANDIDATES:
         if cand in gdf.columns:
@@ -105,22 +107,17 @@ def load_adm3_gdf(shp_path: str) -> tuple[gpd.GeoDataFrame, str]:
             break
     if not code_col:
         raise ValueError(f"No se encontró columna de código ADM3 (probadas: {ADM3_CODE_CANDIDATES})")
-    # Asegurar string
     gdf[code_col] = gdf[code_col].astype(str)
     return gdf, code_col
 
 def find_adm3_code_for_geom(geom3116, adm3_gdf: gpd.GeoDataFrame, code_col: str) -> str | None:
-    """Primero 'contains' del polígono ADM3 sobre el centroide; si falla, 'intersects' con el polígono completo."""
-    # 1) Centroide
+    """Centroide dentro; si no, intersección con el polígono completo."""
     pt = gpd.GeoDataFrame(geometry=[geom3116.centroid], crs="EPSG:3116")
     join1 = gpd.sjoin(pt, adm3_gdf[[code_col, "geometry"]], how="left", predicate="within")
     code = join1.iloc[0][code_col] if not join1.empty and pd.notna(join1.iloc[0][code_col]) else None
     if code:
         return str(code)
-
-    # 2) Intersección con el polígono completo
     poly = gpd.GeoDataFrame(geometry=[geom3116], crs="EPSG:3116")
-    # usar bbox para acelerar
     candidates = adm3_gdf[adm3_gdf.intersects(geom3116.envelope)]
     if candidates.empty:
         return None
@@ -129,7 +126,6 @@ def find_adm3_code_for_geom(geom3116, adm3_gdf: gpd.GeoDataFrame, code_col: str)
     return str(code) if code else None
 
 def get_adm3_doc_from_code(code: str):
-    """Busca el documento Adm3 en Mongo por ext_id=code."""
     return Adm3.objects(ext_id=code).only("id", "ext_id").first()
 
 # ========== UPSERT ==========
@@ -145,11 +141,9 @@ def upsert_one(filepath: str, adm3_gdf: gpd.GeoDataFrame, adm3_code_col: str, er
         if geom is None or geom.is_empty:
             raise ValueError("Geometría vacía o inválida")
 
-        # Cálculos
         lat, lon = centroid_wgs84_from_3116(geom)  # grados
         farm_ha = area_hectares_from_3116(geom)
 
-        # ADM3 (código desde shapefile) → documento en Mongo
         adm3_code = find_adm3_code_for_geom(geom, adm3_gdf, adm3_code_col)
         adm3_doc = get_adm3_doc_from_code(adm3_code) if adm3_code else None
         if not adm3_doc:
@@ -161,7 +155,7 @@ def upsert_one(filepath: str, adm3_gdf: gpd.GeoDataFrame, adm3_code_col: str, er
         ).first()
 
         if farm:
-            farm.adm3_id = adm3_doc  # actualiza si cambió
+            farm.adm3_id = adm3_doc
             farm.log.updated = datetime.now()
             farm.save()
             action_farm = "actualizado"
@@ -230,6 +224,11 @@ def upsert_one(filepath: str, adm3_gdf: gpd.GeoDataFrame, adm3_code_col: str, er
 # ========== RUNNER ==========
 
 def run(polygons_dir: str, adm3_shp: str, errors_out_dir: str | None = None):
+    if not os.path.isdir(polygons_dir):
+        raise FileNotFoundError(f"No existe la carpeta de polígonos: {polygons_dir}")
+    if not os.path.isfile(adm3_shp):
+        raise FileNotFoundError(f"No existe el shapefile ADM3: {adm3_shp}")
+
     adm3_gdf, code_col = load_adm3_gdf(adm3_shp)
 
     files = [os.path.join(polygons_dir, f) for f in os.listdir(polygons_dir) if f.lower().endswith(".geojson")]
