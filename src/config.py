@@ -19,6 +19,15 @@ config['MONGO_DB_NAME'] = os.getenv("MONGO_DB_NAME")
 config['MONGO_URI'] = os.getenv("MONGO_URI")
 config['DATA'] = os.getenv("DATA")
 
+config['GEOFARMER_POLYGONS_DIR'] = os.getenv("GEOFARMER_POLYGONS_DIR")
+config['ADM3_SHP_PATH'] = os.getenv("ADM3_SHP_PATH")
+config['GEOFARMER_ERRORS_DIR'] = os.getenv("GEOFARMER_ERRORS_DIR")
+
+config['GEOFARMER_INPUT_TODOS'] = os.getenv("GEOFARMER_INPUT_TODOS")
+config['GEOFARMER_OUTPUT_POLYGONS'] = os.getenv("GEOFARMER_OUTPUT_POLYGONS", os.getenv("GEOFARMER_POLYGONS_DIR"))
+config['SAGARI_CSV_PATH'] = os.getenv("SAGARI_CSV_PATH")
+
+
 # G1 = TERNEROS_MENORES_1_ANIO
 # G2 = HEMBRAS_MACHOS_1_2_ANIOS
 # G3 = HEMBRAS_MENORES_2_3_ANIOS
