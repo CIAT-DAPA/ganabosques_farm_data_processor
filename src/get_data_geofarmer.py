@@ -1,50 +1,61 @@
 import os
-import json
 import requests
 import geopandas as gpd
-from shapely.geometry import shape, Point, Polygon
+from shapely.geometry import shape
 
-# === CONFIGURACIÓN ===
-CLIENT_ID = "a0009aff-16cb-4be5-abba-4fe2e5b3c70d"
-CLIENT_SECRET = "t4rokBXq6QWm5vkR44wMfiIvxxLNjUTa2QSMnc4B"
+# === CONFIGURACIÓN BASE ===
 BASE_URL = "https://api-v3.geocitizen.org"
 OUTPUT_DIR = r"D:\OneDrive - CGIAR\Desktop\ganabosques\ganabosques_results\03_etl_farms\GEOFARMER\inputs\api_geofarmer"
 
+# Diccionario con todas las empresas
+CLIENTS = {
+    "Colacteos": {
+        "CLIENT_ID": "a0009aff-16cb-4be5-abba-4fe2e5b3c70d",
+        "CLIENT_SECRET": "t4rokBXq6QWm5vkR44wMfiIvxxLNjUTa2QSMnc4B"
+    },
+    "Lacteos_del_Hogar": {
+        "CLIENT_ID": "a02956a8-40a8-4c83-a72f-574cadc84042",
+        "CLIENT_SECRET": "K4MsItX2zHlYOxQNt95bWKrF542ymKy5mJMCH7tL"
+    },
+    "Carnatural": {
+        "CLIENT_ID": "a029578a-0d07-46c3-a533-1eb48f747192",
+        "CLIENT_SECRET": "IJEAWScxi8F03NkFqD7ry3fAG2povPXtBVPdmamg"
+    },
+    "Fedegwa": {
+        "CLIENT_ID": "a02957ac-74e6-484a-a3ca-b5b4a1f8deec",
+        "CLIENT_SECRET": "QLWbXfnHUxXcyTT1KwDDFFAMAmjrHzo6qr2I8iN7"
+    }
+}
+
 # === FUNCIONES ===
-def get_token():
-    """Obtiene el token de acceso desde GeoCitizen"""
+
+def get_token(client_id, client_secret):
+    """Obtiene el token OAuth2 de cada cliente"""
     url = f"{BASE_URL}/oauth/token"
     data = {
         "grant_type": "client_credentials",
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET
+        "client_id": client_id,
+        "client_secret": client_secret
     }
     r = requests.post(url, data=data)
     r.raise_for_status()
     token = r.json().get("access_token")
-    print("✅ Token obtenido correctamente")
     return token
 
 def get_farms(token):
-    """Consulta las fincas desde GeoCitizen"""
+    """Obtiene las fincas asociadas al cliente"""
     url = f"{BASE_URL}/client/farms"
-    headers = {
-        "accept": "application/json",
-        "Authorization": f"Bearer {token}"
-    }
+    headers = {"Authorization": f"Bearer {token}", "accept": "application/json"}
     r = requests.get(url, headers=headers)
     r.raise_for_status()
-    farms_data = r.json().get("data", [])
-    print(f"📦 Se obtuvieron {len(farms_data)} fincas")
-    return farms_data
+    return r.json().get("data", [])
 
-def save_farm_as_geojson(farm, output_dir):
-    """Guarda una finca (y sus parcelas) como GeoJSON"""
+def save_farm_as_geojson(farm, company_dir):
+    """Convierte la finca (y sus parcelas) a GeoJSON y la guarda"""
     features = []
 
-    # Geometría principal de la finca
+    # Geometría principal
     if farm.get("geometry"):
-        geom = shape(farm["geometry"])
         features.append({
             "type": "Feature",
             "geometry": farm["geometry"],
@@ -57,7 +68,7 @@ def save_farm_as_geojson(farm, output_dir):
             }
         })
 
-    # Parcelas de la finca
+    # Parcelas
     for parcel in farm.get("farm_parcels", []):
         if parcel.get("geometry"):
             features.append({
@@ -73,27 +84,37 @@ def save_farm_as_geojson(farm, output_dir):
                 }
             })
 
-    # Crear GeoDataFrame y guardar
     if not features:
-        print(f"⚠️ Finca {farm['farm_name']} sin geometrías, se omite.")
+        print(f"⚠️ {farm['farm_name']} no tiene geometrías, se omite.")
         return
 
     gdf = gpd.GeoDataFrame.from_features(features, crs="EPSG:4326")
-    os.makedirs(output_dir, exist_ok=True)
+
+    os.makedirs(company_dir, exist_ok=True)
     safe_name = farm["farm_name"].replace(" ", "_").replace("/", "_")
-    filepath = os.path.join(output_dir, f"finca_{safe_name}.geojson")
+    filepath = os.path.join(company_dir, f"finca_{safe_name}.geojson")
     gdf.to_file(filepath, driver="GeoJSON")
     print(f"💾 Guardado: {filepath}")
 
-def main():
+def process_company(name, creds):
+    """Procesa todas las fincas de una empresa"""
+    print(f"\n🔹 Procesando empresa: {name}")
     try:
-        token = get_token()
+        token = get_token(creds["CLIENT_ID"], creds["CLIENT_SECRET"])
         farms = get_farms(token)
+        print(f"📦 {len(farms)} fincas encontradas para {name}")
+        company_dir = os.path.join(OUTPUT_DIR, name)
         for farm in farms:
-            save_farm_as_geojson(farm, OUTPUT_DIR)
-        print("✅ Proceso completado correctamente.")
+            save_farm_as_geojson(farm, company_dir)
+        print(f"✅ Empresa {name} procesada correctamente.")
     except Exception as e:
-        print("❌ Error:", e)
+        print(f"❌ Error procesando {name}: {e}")
 
+def main():
+    for company, creds in CLIENTS.items():
+        process_company(company, creds)
+    print("\n🎯 Descarga completada para todas las empresas.")
+
+# === EJECUCIÓN ===
 if __name__ == "__main__":
     main()
