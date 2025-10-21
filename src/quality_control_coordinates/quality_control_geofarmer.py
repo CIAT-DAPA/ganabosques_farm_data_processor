@@ -175,7 +175,7 @@ def procesar():
             gdf_all = pd.concat(partes, ignore_index=True)
             geom_union = poligono_unido(gdf_all)
             out_gdf = gpd.GeoDataFrame({"SIT": [sit]}, geometry=[geom_union], crs=f"EPSG:{OUTPUT_EPSG}")
-            destino = out_path / f"SIT_{sit}.geojson"
+            destino = out_path / f"{sit}.geojson"
             # Siempre sobreescribe un único archivo por SIT
             if destino.exists():
                 destino.unlink()
