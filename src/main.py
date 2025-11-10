@@ -8,14 +8,14 @@ from tools.log_print import log_print
 from ganabosques_orm.enums.farmsource import FarmSource
 
 # ====== SAGARI ======
-from get_data_sagari.get_data_sagari import get_data_sagari
+from get_data import get_data_sagari
 from quality_control_coordinates.quality_control_coordinates import quality_control_coordinates
 from polygons_buffers.polygons_buffers import buffer as make_buffers
 from save_farm.save_farm import save_farm as save_farm_sagari
 
 # ====== GEOFARMER ======
 # Paso 1: descarga desde API (importa el módulo completo)
-from get_data_sagari import get_data_geofarmer as fetch_geofarmer_api
+from get_data import get_data_geofarmer as fetch_geofarmer_api
 # Paso 2: unión por SIT
 from quality_control_coordinates.quality_control_geofarmer import procesar as union_sit_geofarmer
 # Paso 3: guardar en MongoDB
