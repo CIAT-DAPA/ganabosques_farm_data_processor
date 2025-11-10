@@ -62,15 +62,17 @@ def quality_control_coordinates(input_path, path_output, workspace, url_geoserve
     total_filtrado = len(df)
     print(f"🧹 Registros eliminados por coordenadas incompletas: {total_original - total_filtrado}")
 
-    # 4) Crear puntos en EPSG:4326 (grados) y reproyectar a EPSG:3116 (metros)  ← PUNTO 1 CORREGIDO
+    # 4) Crear puntos en EPSG:4326 (grados)
     puntos_4326 = gpd.GeoDataFrame(
         df.copy(),
         geometry=[Point(xy) for xy in zip(df["LONGITUD"], df["LATITUD"])],
         crs="EPSG:4326"
     )
-    gdf_puntos = puntos_4326.to_crs("EPSG:3116")
+    # Ya trabajamos en EPSG:4326 — no se reproyecta a 3116.
+    gdf_puntos = puntos_4326
+    print("📍 Puntos creados en EPSG:4326.")
 
-    # 5) Cargar shapefile y llevar a EPSG:3116
+    # 5) Cargar shapefile y asegurar CRS EPSG:4326 (si falta)
     shp_files = [f for f in os.listdir(path_output) if f.lower().endswith(".shp")]
     if not shp_files:
         print("❌ No se encontró ningún .shp extraído en", path_output)
@@ -81,8 +83,16 @@ def quality_control_coordinates(input_path, path_output, workspace, url_geoserve
     if gdf_veredas.crs is None:
         print("⚠️ La capa no trae CRS definido; se asume EPSG:4326.")
         gdf_veredas = gdf_veredas.set_crs("EPSG:4326")
-    gdf_veredas = gdf_veredas.to_crs("EPSG:3116")
-    print("📍 Shapefile cargado y CRS transformado a EPSG:3116.")
+    else:
+        # Si trae CRS y no es EPSG:4326, lo mejor es reproyectar al 4326 para coincidencia.
+        if gdf_veredas.crs.to_string() != "EPSG:4326":
+            try:
+                gdf_veredas = gdf_veredas.to_crs("EPSG:4326")
+                print("🔁 La capa fue reproyectada a EPSG:4326 para coincidir con los puntos.")
+            except Exception as e:
+                print("❌ Error al reproyectar la capa a EPSG:4326:", e)
+                return
+    print("📍 Shapefile cargado y en EPSG:4326.")
 
     # 6) Spatial join (intersects)
     # Ajusta aquí los nombres si tu capa usa otras columnas:
@@ -96,6 +106,7 @@ def quality_control_coordinates(input_path, path_output, workspace, url_geoserve
               list(gdf_veredas.columns))
         return
 
+    # Realizar spatial join (ambos GeoDataFrame están en EPSG:4326)
     gdf_join = gpd.sjoin(
         gdf_puntos,
         gdf_veredas[[m_cod_ver, m_cod_mpio, m_cod_dpto, "geometry"]],
@@ -119,6 +130,7 @@ def quality_control_coordinates(input_path, path_output, workspace, url_geoserve
     if "index_right" in gdf_join.columns:
         gdf_join = gdf_join.drop(columns=["index_right"])
     if "geometry" in gdf_join.columns:
+        # Eliminamos la geometría para dejar solo atributos en el CSV final
         gdf_join = gdf_join.drop(columns=["geometry"])
 
     # 9) Filtrar registros con IDs completos
@@ -131,4 +143,3 @@ def quality_control_coordinates(input_path, path_output, workspace, url_geoserve
     output_file = os.path.join(path_output, os.path.basename(ruta_csv))
     df_final.to_csv(output_file, index=False, encoding="utf-8")
     print(f"💾 Archivo final guardado en: {output_file}")
-################

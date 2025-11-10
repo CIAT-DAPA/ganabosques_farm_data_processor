@@ -26,8 +26,8 @@ CANDIDATOS_COL_SIT = ["SIT_CODE", "SIT", "CODIGO_SIT", "SITCODE", "SIT_CODE_ICA"
 # Si los .geojson NO traen CRS, asumimos este (deja None si ya traen CRS):
 ASSUME_INPUT_EPSG = 4326   # típico para GeoJSON; cambia a None si no quieres asumir
 
-# CRS de salida solicitado:
-OUTPUT_EPSG = 3116
+# CRS de salida solicitado: ahora 4326 (NO reproyectamos a 3116)
+OUTPUT_EPSG = 4326
 
 REPORTE_TXT = "reporte_union_SIT.txt"
 
@@ -92,15 +92,23 @@ def cargar_mapa_ruv_a_sit(csv_path):
     return dict(zip(df[COL_RUV], df[col_sit])), col_sit
 
 def leer_gdf_y_reproyectar(file_path):
+    """
+    Lee un GeoJSON/archivo vectorial, asigna CRS si falta (ASSUME_INPUT_EPSG)
+    y reproyecta a OUTPUT_EPSG (ahora 4326). Repara geometrías con buffer(0).
+    """
     gdf = gpd.read_file(file_path)
     # Asignar CRS si no trae
     if gdf.crs is None and ASSUME_INPUT_EPSG:
         gdf.set_crs(epsg=ASSUME_INPUT_EPSG, inplace=True)
     # Reparar geometrías inválidas antes de uniones/dissolve
     gdf["geometry"] = gdf.geometry.buffer(0)
-    # Reproyectar a salida
+    # Reproyectar a salida (ahora OUTPUT_EPSG = 4326)
     if gdf.crs is not None and gdf.crs.to_epsg() != OUTPUT_EPSG:
-        gdf = gdf.to_crs(epsg=OUTPUT_EPSG)
+        try:
+            gdf = gdf.to_crs(epsg=OUTPUT_EPSG)
+        except Exception:
+            # Si falla la reproyección, dejamos que el error se propague al llamador
+            raise
     return gdf
 
 def poligono_unido(gdf):
@@ -168,7 +176,7 @@ def procesar():
         except Exception as e:
             logs.append(f"ERROR al leer {nombre}: {e}")
 
-    # 4) Unir y escribir UN solo archivo por SIT (EPSG:3116)
+    # 4) Unir y escribir UN solo archivo por SIT (CRS de salida: EPSG:4326)
     escritos = 0
     for sit, partes in grupos.items():
         try:
