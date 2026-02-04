@@ -1,4 +1,4 @@
-name: Devops Ganabosques Deforestation Data Processor
+name: Devops Ganabosques Farm Data Processor
 
 on:
   push:
@@ -12,9 +12,9 @@ permissions:
 
 jobs:
 
-# ------- START DEFORESTATION PROCCESS -------- #
+# ------- START FARM DATA PROCESS -------- #
 
-  TestDeforestation:
+  TestFarmData:
     runs-on: ubuntu-latest
 
     steps:
@@ -41,12 +41,12 @@ jobs:
           source env/bin/activate
         # PYTHONPATH=$PYTHONPATH:./src pytest tests/
 
-# ------- END DEFORESTATION PROCCESS -------- #    
+# ------- END FARM DATA PROCESS -------- #    
 
 # ------- START MERGE PROCCESS -------- #
 
-  MergeMainDeforestation:
-    needs: [TestDeforestation]
+  MergeMainFarmData:
+    needs: [TestFarmData]
     name: Merge Stage with Main
     permissions: write-all
     runs-on: ubuntu-latest
@@ -66,7 +66,7 @@ jobs:
 # ------- START RELEASE PROCCESS -------- #
 
   PostRelease:
-    needs: MergeMainDeforestation
+    needs: MergeMainFarmData
     name: Create Release
     runs-on: ubuntu-latest
     permissions: write-all
@@ -76,13 +76,13 @@ jobs:
         fetch-depth: '0'
     # API Zip
     - name: Zip artifact for deployment
-      run: zip releaseDeforestation.zip ./src/* -r
+      run: zip releaseFarmData.zip ./src/* -r
     # Upload Artifacts
-    - name: Upload Deforestation artifact for deployment job
+    - name: Upload Farm Data artifact for deployment job
       uses: actions/upload-artifact@v4
       with:
-        name: Deforestation
-        path: releaseDeforestation.zip
+        name: FarmData
+        path: releaseFarmData.zip
     # Generate Tagname
     - name: Generate Tagname for release
       id: taggerDryRun
@@ -108,15 +108,15 @@ jobs:
         draft: false
         prerelease: false
     # Upload Assets to release
-    - name: Upload Release Asset Deforestation
-      id: upload-Deforestation-release-asset 
+    - name: Upload Release Asset FarmData
+      id: upload-FarmData-release-asset 
       uses: actions/upload-release-asset@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }} # This pulls from the CREATE RELEASE step above, referencing it's ID to get its outputs object, which include a `upload_url`. See this blog post for more info: https://jasonet.co/posts/new-features-of-github-actions/#passing-data-to-future-steps 
-        asset_path: ./releaseDeforestation.zip
-        asset_name: releaseDeforestation.zip
+        asset_path: ./releaseFarmData.zip
+        asset_name: releaseFarmData.zip
         asset_content_type: application/zip
     # # update version setup.py
     # - name: Checkout code
