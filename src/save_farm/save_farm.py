@@ -4,7 +4,6 @@ from datetime import datetime
 import pandas as pd
 from tqdm import tqdm
 
-from mongoengine import connect
 from ganabosques_orm.collections.farm import Farm
 from ganabosques_orm.collections.farmpolygons import FarmPolygons
 from ganabosques_orm.auxiliaries.extidfarm import ExtIdFarm
@@ -15,17 +14,16 @@ from ganabosques_orm.enums.source import Source
 from ganabosques_orm.enums.ugg import UGG
 from ganabosques_orm.enums.species import Species
 from ganabosques_orm.collections.adm3 import Adm3
+from ganabosques_orm.enums.valuechain import ValueChain
 from config import config
 
 import logging
 from tools.log_print import log_print 
 
 
-connect(db=config['MONGO_DB_NAME'], host=config['MONGO_URI'])
-
 logger = logging.getLogger("Save Farm")
 
-def process_farm_file(csv_path, geojson_folder, output_path_save, farmsource=None):
+def process_farm_file(csv_path, geojson_folder, output_path_save, farmsource=None, value_chain: ValueChain = None):
     df = pd.read_csv(csv_path, dtype=str)
 
     ugg_map = generar_ugg_map(df.columns)
@@ -109,6 +107,7 @@ def process_farm_file(csv_path, geojson_folder, output_path_save, farmsource=Non
                     adm3_id=adm3_id,
                     ext_id=ext_ids,
                     farm_source=farm_source,
+                    value_chain=value_chain,
                     log=log
                 )
                 try:
@@ -213,11 +212,10 @@ def process_farm_file(csv_path, geojson_folder, output_path_save, farmsource=Non
 
     log_print(logger, f"✅ Finalizado: {buenos} guardados, {malos} con error.")
     log_print(logger, "📊 Resumen:")
-    print(errores)
     log_print(logger, f"Farms  ➕ {farm_creados} creados, 🔄 {farm_actualizados} actualizados, ✅ {farm_sin_cambios} sin cambios, ❌ {farm_errores} con error")
     log_print(logger, f"Polys  ➕ {polygon_creados} creados, 🔄 {polygon_actualizados} actualizados, ✅ {polygon_sin_cambios} sin cambios, ❌ {polygon_errores} con error")
 
-def save_farm(csv_folder_path, output_path_save):
+def save_farm(csv_folder_path, output_path_save, value_chain: ValueChain):
     if not os.path.isdir(csv_folder_path):
         raise Exception(f"La ruta proporcionada no es un directorio: {csv_folder_path}")
 
@@ -229,7 +227,7 @@ def save_farm(csv_folder_path, output_path_save):
         if filename.endswith(".csv"):
             csv_path = os.path.join(csv_folder_path, filename)
             print(f"📄 Procesando archivo: {csv_path}")
-            process_farm_file(csv_path, geojson_folder, output_path_save)
+            process_farm_file(csv_path, geojson_folder, output_path_save, value_chain)
 
 def generar_ugg_map(df_columns):
     ugg_map = {}

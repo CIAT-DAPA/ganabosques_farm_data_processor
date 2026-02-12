@@ -21,17 +21,8 @@ config['MONGO_DB_NAME'] = os.getenv("MONGO_DB_NAME")
 config['DATA'] = os.getenv("DATA")
 
 # === Rutas ===
-config['GEOFARMER_POLYGONS_DIR'] = os.getenv("GEOFARMER_POLYGONS_DIR")
-config['GEOFARMER_ERRORS_DIR'] = os.getenv("GEOFARMER_ERRORS_DIR")
-config['GEOFARMER_INPUT_TODOS'] = os.getenv("GEOFARMER_INPUT_TODOS")
-config['GEOFARMER_OUTPUT_API'] = os.getenv("GEOFARMER_OUTPUT_API")
 config['ADM3_SHP_PATH'] = os.getenv("ADM3_SHP_PATH")
 config['SAGARI_CSV_PATH'] = os.getenv("SAGARI_CSV_PATH")
-
-config['GEOFARMER_OUTPUT_POLYGONS'] = (
-    os.getenv("GEOFARMER_OUTPUT_POLYGONS") or
-    config['GEOFARMER_POLYGONS_DIR']
-)
 
 # === API GeoFarmer ===
 config['GEOFARMER_BASE_URL'] = os.getenv("GEOFARMER_BASE_URL")

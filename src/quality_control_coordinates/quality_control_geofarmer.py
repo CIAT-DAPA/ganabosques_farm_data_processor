@@ -1,213 +1,469 @@
 # -*- coding: utf-8 -*-
+"""
+Paso 2 GEOFARMER: Control de calidad de GeoJSONs descargados.
+
+Valida:
+  - Presencia de código externo (farm_code).
+  - farm_code no sea solo ceros (ej: "000", "0" → inválido; "00000001" → válido).
+  - Geometría válida en EPSG:4326 (coordenadas lon/lat).
+
+Enriquece:
+  - Extrae código ADM3 vía spatial join con shapefile (preserva ceros a la
+    izquierda, ej: "05304003").
+  - Valida centroide: si ya viene del API y cae dentro de la geometría lo
+    conserva; si no, lo recalcula desde el centroide de la geometría.
+  - Calcula área en hectáreas sobre elipsoide WGS84 (Geod).
+  - Almacena adm3_code, latitude, longitude, farm_ha en las properties.
+
+Limpieza:
+  - Elimina campos sensibles (contact_name, address).
+  - Genera CSV de errores por empresa para revisión posterior.
+"""
 from pathlib import Path
 import os
 import re
 import json
-import pandas as pd
+import csv
+import logging
+from datetime import datetime
+
 import geopandas as gpd
-from shapely.geometry import Polygon, MultiPolygon
+import pandas as pd
+from shapely.geometry import shape, Point, Polygon, MultiPolygon
 from shapely.ops import unary_union
+from shapely.validation import make_valid
+from pyproj import Geod
+from tqdm import tqdm
 
-# === CONFIG desde .env ===
-# Usa 'from config import config' si ejecutas directo: python src\polygons_buffers.py
-# Usa 'from src.config import config' si ejecutas como módulo: python -m src.polygons_buffers
 from config import config
-# from src.config import config
 
-# Directorios/archivos desde .env (normalizados)
-INPUT_DIR  = os.path.normpath(config['GEOFARMER_INPUT_TODOS'])
-OUTPUT_DIR = os.path.normpath(config['GEOFARMER_OUTPUT_POLYGONS'])
-CSV_PATH   = os.path.normpath(config['SAGARI_CSV_PATH'])
+logger = logging.getLogger("quality_control_geofarmer")
 
-# ==== Parámetros funcionales ====
-COL_RUV = "CODIGO_RUV"
-CANDIDATOS_COL_SIT = ["SIT_CODE", "SIT", "CODIGO_SIT", "SITCODE", "SIT_CODE_ICA"]
-
-# Si los .geojson NO traen CRS, asumimos este (deja None si ya traen CRS):
-ASSUME_INPUT_EPSG = 4326   # típico para GeoJSON; cambia a None si no quieres asumir
-
-# CRS de salida solicitado: ahora 4326 (NO reproyectamos a 3116)
+# CRS esperado
 OUTPUT_EPSG = 4326
 
-REPORTE_TXT = "reporte_union_SIT.txt"
+# Campos sensibles a eliminar de las properties
+CAMPOS_SENSIBLES = {"contact_name", "address"}
 
-# ==== Regex de extracción ====
-RE_SIT = re.compile(r"SIT[_\-\s]*(\d+)", re.IGNORECASE)
-RE_RUV = re.compile(r"RUV[_\-\s]*(\d+)", re.IGNORECASE)
+# Regex para detectar farm_code compuesto solo de ceros
+RE_SOLO_CEROS = re.compile(r"^0+$")
 
-def _only_digits(val):
-    if val is None:
+# Candidatos para la columna de código ADM3 en el shapefile
+ADM3_CODE_CANDIDATES = [
+    "ext_id", "cod_ver", "ADM3_CODE", "ADM3",
+    "MPIO_CCDGO", "DPTOMPIO", "CODIGO", "CODE",
+]
+
+# Geod para cálculo de área sobre elipsoide WGS84
+GEOD = Geod(ellps="WGS84")
+
+
+# ========= HELPERS =========
+
+def _load_geojson(path):
+    """Carga un archivo GeoJSON como dict."""
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _extract_first_properties(geojson_obj):
+    """Extrae las properties del primer Feature (para validación)."""
+    if geojson_obj.get("type") == "FeatureCollection":
+        features = geojson_obj.get("features", [])
+        if features:
+            return features[0].get("properties", {})
+    elif geojson_obj.get("type") == "Feature":
+        return geojson_obj.get("properties", {})
+    return {}
+
+
+def _remove_sensitive_fields(geojson_obj):
+    """
+    Elimina campos sensibles de todas las features del GeoJSON.
+    Modifica el dict in-place y lo devuelve.
+    """
+    features = []
+    if geojson_obj.get("type") == "FeatureCollection":
+        features = geojson_obj.get("features", [])
+    elif geojson_obj.get("type") == "Feature":
+        features = [geojson_obj]
+
+    for feat in features:
+        props = feat.get("properties", {})
+        for campo in CAMPOS_SENSIBLES:
+            props.pop(campo, None)
+
+    return geojson_obj
+
+
+def _validate_geometry(geojson_obj):
+    """
+    Extrae la geometría del GeoJSON y valida que sea un polígono en EPSG:4326.
+    Devuelve (geom_shapely, None) si OK o (None, mensaje_error) si falla.
+    """
+    features = []
+    if geojson_obj.get("type") == "FeatureCollection":
+        features = geojson_obj.get("features", [])
+    elif geojson_obj.get("type") == "Feature":
+        features = [geojson_obj]
+
+    geoms = []
+    for feat in features:
+        raw_geom = feat.get("geometry")
+        if raw_geom:
+            geom = shape(raw_geom)
+            try:
+                geom = make_valid(geom)
+            except Exception:
+                geom = geom.buffer(0)
+            if not geom.is_empty:
+                geoms.append(geom)
+
+    if not geoms:
+        return None, "Geometría vacía o inválida"
+
+    geom_union = unary_union(geoms) if len(geoms) > 1 else geoms[0]
+
+    # Validar rango de coordenadas (heurística CRS 4326)
+    minx, miny, maxx, maxy = geom_union.bounds
+    if max(abs(minx), abs(miny), abs(maxx), abs(maxy)) > 180:
+        return None, f"Coordenadas fuera de rango WGS84 (bounds: {geom_union.bounds}). Posible CRS incorrecto."
+
+    return geom_union, None
+
+
+# ========= ADM3 =========
+
+def _load_adm3_gdf(shp_path):
+    """Carga el shapefile ADM3, reproyecta a 4326, identifica columna de código."""
+    gdf = gpd.read_file(shp_path)
+    if gdf.crs is None:
+        raise ValueError("Shapefile ADM3 sin CRS definido.")
+    if gdf.crs.to_epsg() != 4326:
+        gdf = gdf.to_crs(epsg=4326)
+    code_col = None
+    for cand in ADM3_CODE_CANDIDATES:
+        if cand in gdf.columns:
+            code_col = cand
+            break
+    if not code_col:
+        raise ValueError(
+            f"No se encontró columna de código ADM3 (probadas: {ADM3_CODE_CANDIDATES})"
+        )
+    # Preservar ceros a la izquierda → siempre string
+    gdf[code_col] = gdf[code_col].astype(str).str.strip()
+    return gdf, code_col
+
+
+def _find_adm3_code(geom, adm3_gdf, code_col):
+    """Busca código ADM3 por spatial join (centroid within, luego intersects)."""
+    if geom is None or geom.is_empty:
         return None
-    m = re.search(r"(\d+)", str(val))
-    return m.group(1) if m else None
-
-def _prop_ci(props, key):
-    if not isinstance(props, dict):
+    # Primer intento: centroide dentro de polígono ADM3
+    try:
+        pt = gpd.GeoDataFrame(geometry=[geom.centroid], crs="EPSG:4326")
+        join1 = gpd.sjoin(
+            pt, adm3_gdf[[code_col, "geometry"]], how="left", predicate="within"
+        )
+        if not join1.empty and pd.notna(join1.iloc[0][code_col]):
+            return str(join1.iloc[0][code_col])
+    except Exception:
+        pass
+    # Segundo intento: intersección con envelope
+    try:
+        poly = gpd.GeoDataFrame(geometry=[geom], crs="EPSG:4326")
+        candidates = adm3_gdf[adm3_gdf.intersects(geom.envelope)]
+        if candidates.empty:
+            return None
+        join2 = gpd.sjoin(
+            poly, candidates[[code_col, "geometry"]], how="left", predicate="intersects"
+        )
+        if not join2.empty and pd.notna(join2.iloc[0][code_col]):
+            return str(join2.iloc[0][code_col])
+    except Exception:
         return None
-    key_l = key.lower()
-    for k, v in props.items():
-        if str(k).strip().lower() == key_l:
-            return v
     return None
 
-def extraer_sit_ruv_de_contenido(path_json):
-    try:
-        with open(path_json, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception:
-        return None, None
 
-    def from_props(props):
-        sit = _only_digits(_prop_ci(props, "SIT"))
-        ruv = _only_digits(_prop_ci(props, "RUV"))
-        return sit, ruv
+# ========= CENTROIDE =========
 
-    if isinstance(data, dict):
-        if data.get("type") == "FeatureCollection":
-            for feat in data.get("features", []):
-                s, r = from_props(feat.get("properties", {}))
-                if s or r:
-                    return s, r
-        elif data.get("type") == "Feature":
-            return from_props(data.get("properties", {}))
-        if "properties" in data:
-            return from_props(data.get("properties", {}))
-    return None, None
-
-def cargar_mapa_ruv_a_sit(csv_path):
-    df = pd.read_csv(csv_path, dtype=str)
-    if COL_RUV not in df.columns:
-        raise ValueError(f"No existe la columna {COL_RUV} en el CSV.")
-    col_sit = None
-    for cand in CANDIDATOS_COL_SIT:
-        if cand in df.columns:
-            col_sit = cand
-            break
-    if not col_sit:
-        raise ValueError(f"No encontré columna SIT en {CANDIDATOS_COL_SIT}")
-
-    df[COL_RUV] = df[COL_RUV].map(_only_digits)
-    df[col_sit] = df[col_sit].map(_only_digits)
-    df = df.dropna(subset=[COL_RUV, col_sit]).drop_duplicates(subset=[COL_RUV], keep="first")
-    return dict(zip(df[COL_RUV], df[col_sit])), col_sit
-
-def leer_gdf_y_reproyectar(file_path):
+def _resolve_centroid(geom, props):
     """
-    Lee un GeoJSON/archivo vectorial, asigna CRS si falta (ASSUME_INPUT_EPSG)
-    y reproyecta a OUTPUT_EPSG (ahora 4326). Repara geometrías con buffer(0).
+    Determina lat, lon del centroide:
+      1. Si props["centroid"] existe y es [lon, lat], verifica que caiga
+         dentro de la geometría.
+      2. Si cae dentro → lo usa.
+      3. Si no cae dentro o no existe → calcula desde geom.centroid.
+
+    Returns:
+        (latitude, longitude)
     """
-    gdf = gpd.read_file(file_path)
-    # Asignar CRS si no trae
-    if gdf.crs is None and ASSUME_INPUT_EPSG:
-        gdf.set_crs(epsg=ASSUME_INPUT_EPSG, inplace=True)
-    # Reparar geometrías inválidas antes de uniones/dissolve
-    gdf["geometry"] = gdf.geometry.buffer(0)
-    # Reproyectar a salida (ahora OUTPUT_EPSG = 4326)
-    if gdf.crs is not None and gdf.crs.to_epsg() != OUTPUT_EPSG:
+    centroid_raw = props.get("centroid")
+    if centroid_raw and isinstance(centroid_raw, (list, tuple)) and len(centroid_raw) >= 2:
         try:
-            gdf = gdf.to_crs(epsg=OUTPUT_EPSG)
-        except Exception:
-            # Si falla la reproyección, dejamos que el error se propague al llamador
-            raise
-    return gdf
+            lon, lat = float(centroid_raw[0]), float(centroid_raw[1])
+            pt = Point(lon, lat)
+            if geom.contains(pt):
+                return lat, lon
+        except (ValueError, TypeError):
+            pass
+    # Calcular desde geometría
+    c = geom.centroid
+    return float(c.y), float(c.x)
 
-def poligono_unido(gdf):
-    # Unión topológica de todas las geometrías
-    geom = unary_union(gdf.geometry)
-    # Normalizar a MultiPolygon/Polygon
-    if isinstance(geom, (Polygon, MultiPolygon)):
-        return geom
-    # Si por alguna razón no es polígono, intentamos buffer(0) y seguimos
-    geom = geom.buffer(0)
-    return geom
 
-def procesar():
-    # Validaciones tempranas de rutas
-    if not INPUT_DIR or not OUTPUT_DIR or not CSV_PATH:
-        raise ValueError("Faltan variables en .env: GEOFARMER_INPUT_TODOS, GEOFARMER_OUTPUT_POLYGONS/GEOFARMER_POLYGONS_DIR, SAGARI_CSV_PATH")
-    in_path = Path(INPUT_DIR)
-    out_path = Path(OUTPUT_DIR)
+# ========= ÁREA =========
+
+def _area_hectares(geom):
+    """Calcula área en hectáreas usando Geod (elipsoide WGS84)."""
+    if geom is None or geom.is_empty:
+        return 0.0
+
+    def _poly_area(polygon):
+        lon, lat = polygon.exterior.coords.xy
+        area, _ = GEOD.polygon_area_perimeter(list(lon), list(lat))
+        a = abs(area)
+        for interior in polygon.interiors:
+            ilon, ilat = interior.coords.xy
+            ia, _ = GEOD.polygon_area_perimeter(list(ilon), list(ilat))
+            a -= abs(ia)
+        return a
+
+    total_m2 = 0.0
+    if isinstance(geom, Polygon):
+        total_m2 = _poly_area(geom)
+    elif isinstance(geom, MultiPolygon):
+        for p in geom.geoms:
+            total_m2 += _poly_area(p)
+    return total_m2 / 10_000.0
+
+
+# ========= ENRIQUECER PROPERTIES =========
+
+def _set_enriched_properties(geojson_obj, adm3_code, latitude, longitude, farm_ha):
+    """Agrega adm3_code, latitude, longitude, farm_ha a todas las features."""
+    features = []
+    if geojson_obj.get("type") == "FeatureCollection":
+        features = geojson_obj.get("features", [])
+    elif geojson_obj.get("type") == "Feature":
+        features = [geojson_obj]
+    for feat in features:
+        props = feat.setdefault("properties", {})
+        props["adm3_code"] = adm3_code
+        props["latitude"] = latitude
+        props["longitude"] = longitude
+        props["farm_ha"] = round(farm_ha, 4)
+    return geojson_obj
+
+
+# ========= FUNCIÓN PRINCIPAL =========
+
+def procesar(input_dir: str = None, output_dir: str = None, adm3_shp: str = None):
+    """
+    Control de calidad para GeoJSONs de GeoFarmer (paso 2).
+
+    Args:
+        input_dir: Carpeta con GeoJSONs del paso 1, organizados por empresa.
+        output_dir: Carpeta de salida con GeoJSONs validados, misma estructura.
+        adm3_shp: Ruta al shapefile ADM3 para spatial join.
+    """
+    if not input_dir:
+        raise ValueError("Se requiere input_dir (directorio con GeoJSONs descargados)")
+    if not output_dir:
+        raise ValueError("Se requiere output_dir (directorio de salida)")
+    if not adm3_shp:
+        raise ValueError("Se requiere adm3_shp (ruta al shapefile ADM3)")
+
+    in_path = Path(os.path.normpath(input_dir))
+    out_path = Path(os.path.normpath(output_dir))
+
     if not in_path.exists():
         raise FileNotFoundError(f"No existe la carpeta de entrada: {in_path}")
+    if not os.path.isfile(adm3_shp):
+        raise FileNotFoundError(f"No existe el shapefile ADM3: {adm3_shp}")
+
     out_path.mkdir(parents=True, exist_ok=True)
-    reporte_path = out_path / REPORTE_TXT
 
-    mapping, col_sit_csv = cargar_mapa_ruv_a_sit(CSV_PATH)
+    errors_dir = out_path / "_errores"
 
-    # Acumular geometrías por SIT
-    grupos = {}
-    logs = []
-    cont_archivos = 0
+    # Cargar shapefile ADM3
+    print("📍 Cargando shapefile ADM3…")
+    adm3_gdf, code_col = _load_adm3_gdf(adm3_shp)
+    print(f"   Columna código: {code_col} | Registros: {len(adm3_gdf)}")
 
-    for geojson in in_path.rglob("*.geojson"):
-        cont_archivos += 1
-        nombre = geojson.name
+    # Descubrir subcarpetas de empresa (primer nivel de subdirectorios)
+    empresa_dirs = sorted([d for d in in_path.iterdir() if d.is_dir() and d.name != "_errores"])
 
-        # 1) SIT / RUV desde nombre
-        sit = (RE_SIT.search(nombre).group(1) if RE_SIT.search(nombre) else None)
-        ruv = (RE_RUV.search(nombre).group(1) if RE_RUV.search(nombre) else None)
+    if not empresa_dirs:
+        # Si no hay subcarpetas, buscar geojsons directamente
+        empresa_dirs = [in_path]
 
-        # 2) Completar desde contenido
-        if not sit or not ruv:
-            s2, r2 = extraer_sit_ruv_de_contenido(geojson)
-            if not sit and s2: sit = s2
-            if not ruv and r2: ruv = r2
+    # Acumuladores globales
+    resumen_empresas = []
+    all_errores = []
 
-        # 3) Resolver SIT con CSV si no existe pero hay RUV
-        if not sit and ruv:
-            sit_csv = mapping.get(ruv)
-            if sit_csv:
-                sit = sit_csv
-                logs.append(f"RESUELTO POR RUV: {nombre}  RUV={ruv} -> SIT={sit}")
-            else:
-                logs.append(f"ADVERTENCIA: {nombre}  RUV={ruv} sin match en CSV")
-                continue
+    for emp_dir in empresa_dirs:
+        empresa = emp_dir.name if emp_dir != in_path else "_sin_empresa"
+        geojson_files = list(emp_dir.glob("*.geojson"))
 
-        if not sit:
-            logs.append(f"OMITIDO: {nombre}  (sin SIT y sin RUV válido)")
-            continue
+        # Acumuladores por empresa
+        errores_emp = []
+        total_emp = 0
+        escritos_emp = 0
+        sin_codigo = 0
+        codigo_ceros = 0
+        sin_geometria = 0
+        crs_invalido = 0
+        sin_adm3 = 0
 
-        try:
-            gdf = leer_gdf_y_reproyectar(geojson)
-            if gdf.empty:
-                logs.append(f"ADVERTENCIA: {nombre} sin geometrías")
-                continue
-            grupos.setdefault(sit, []).append(gdf[["geometry"]])  # solo geometría para unir
-        except Exception as e:
-            logs.append(f"ERROR al leer {nombre}: {e}")
+        emp_out = out_path / empresa
+        emp_out.mkdir(parents=True, exist_ok=True)
 
-    # 4) Unir y escribir UN solo archivo por SIT (CRS de salida: EPSG:4326)
-    escritos = 0
-    for sit, partes in grupos.items():
-        try:
-            gdf_all = pd.concat(partes, ignore_index=True)
-            geom_union = poligono_unido(gdf_all)
-            out_gdf = gpd.GeoDataFrame({"SIT": [sit]}, geometry=[geom_union], crs=f"EPSG:{OUTPUT_EPSG}")
-            destino = out_path / f"{sit}.geojson"
-            # Siempre sobreescribe un único archivo por SIT
-            if destino.exists():
-                destino.unlink()
-            out_gdf.to_file(destino, driver="GeoJSON")
-            escritos += 1
-        except Exception as e:
-            logs.append(f"ERROR al unir/escribir SIT={sit}: {e}")
+        for gj_path in tqdm(geojson_files, desc=f"  📂 {empresa}", unit="archivo", leave=True):
+            total_emp += 1
+            try:
+                data = _load_geojson(gj_path)
+                props = _extract_first_properties(data)
 
-    # 5) Reporte
-    with open(reporte_path, "w", encoding="utf-8") as f:
-        f.write("=== REPORTE UNIÓN POR SIT (sin duplicados) ===\n")
-        f.write(f"Archivos leídos: {cont_archivos}\n")
-        f.write(f"SIT escritos (unión): {escritos}\n")
-        f.write(f"CRS de salida: EPSG:{OUTPUT_EPSG}\n")
-        f.write(f"CSV: {CSV_PATH}  | RUV: {COL_RUV}  | SIT en CSV: {col_sit_csv}\n\n")
-        f.write("---- Detalles ----\n")
-        for line in logs:
-            f.write(line + "\n")
+                farm_id = str(props.get("farm_id", ""))
+                farm_name = str(props.get("farm_name", ""))
+                farm_code = str(props.get("farm_code", "")).strip()
 
-    print("Listo.")
-    print(f"- Archivos origen leídos: {cont_archivos}")
-    print(f"- SIT únicos escritos (sin duplicados): {escritos}")
-    print(f"- Salida: {out_path}")
-    print(f"- Reporte: {reporte_path}")
+                # 1) Validar código externo presente
+                if not farm_code:
+                    sin_codigo += 1
+                    errores_emp.append({
+                        "empresa": empresa,
+                        "archivo": gj_path.name,
+                        "farm_id": farm_id,
+                        "farm_name": farm_name,
+                        "farm_code": "",
+                        "error": "Sin código externo (farm_code vacío o ausente)"
+                    })
+                    continue
+
+                # 2) Validar código externo no sea solo ceros
+                if RE_SOLO_CEROS.match(farm_code):
+                    codigo_ceros += 1
+                    errores_emp.append({
+                        "empresa": empresa,
+                        "archivo": gj_path.name,
+                        "farm_id": farm_id,
+                        "farm_name": farm_name,
+                        "farm_code": farm_code,
+                        "error": f"Código externo inválido (solo ceros: '{farm_code}')"
+                    })
+                    continue
+
+                # 3) Validar geometría y CRS
+                geom, geom_err = _validate_geometry(data)
+                if geom is None:
+                    if "CRS" in (geom_err or ""):
+                        crs_invalido += 1
+                    else:
+                        sin_geometria += 1
+                    errores_emp.append({
+                        "empresa": empresa,
+                        "archivo": gj_path.name,
+                        "farm_id": farm_id,
+                        "farm_name": farm_name,
+                        "farm_code": farm_code,
+                        "error": geom_err
+                    })
+                    continue
+
+                # 4) Buscar código ADM3 vía spatial join
+                adm3_code = _find_adm3_code(geom, adm3_gdf, code_col)
+                if not adm3_code:
+                    sin_adm3 += 1
+                    errores_emp.append({
+                        "empresa": empresa,
+                        "archivo": gj_path.name,
+                        "farm_id": farm_id,
+                        "farm_name": farm_name,
+                        "farm_code": farm_code,
+                        "error": f"No se encontró ADM3 (bounds: {geom.bounds})"
+                    })
+                    continue
+
+                # 5) Centroide: verificar del API o calcular
+                latitude, longitude = _resolve_centroid(geom, props)
+
+                # 6) Área en hectáreas
+                farm_ha = _area_hectares(geom)
+
+                # 7) Limpiar sensibles + enriquecer properties
+                cleaned = _remove_sensitive_fields(data)
+                enriched = _set_enriched_properties(
+                    cleaned, adm3_code, latitude, longitude, farm_ha
+                )
+
+                # 8) Guardar
+                destino = emp_out / f"FARM_ID_{farm_id}.geojson"
+                with open(destino, "w", encoding="utf-8") as f:
+                    json.dump(enriched, f, ensure_ascii=False)
+                escritos_emp += 1
+
+            except Exception as e:
+                errores_emp.append({
+                    "empresa": empresa,
+                    "archivo": gj_path.name,
+                    "farm_id": "",
+                    "farm_name": "",
+                    "farm_code": "",
+                    "error": str(e)
+                })
+
+        # Guardar CSV de errores por empresa
+        err_csv_path = None
+        if errores_emp:
+            errors_dir.mkdir(parents=True, exist_ok=True)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            err_csv_path = errors_dir / f"errores_qc_{empresa}_{ts}.csv"
+            with open(err_csv_path, "w", encoding="utf-8", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=[
+                    "empresa", "archivo", "farm_id", "farm_name", "farm_code", "error"
+                ])
+                writer.writeheader()
+                writer.writerows(errores_emp)
+
+        all_errores.extend(errores_emp)
+        resumen_empresas.append({
+            "empresa": empresa,
+            "total": total_emp,
+            "escritos": escritos_emp,
+            "sin_codigo": sin_codigo,
+            "codigo_ceros": codigo_ceros,
+            "sin_geometria": sin_geometria,
+            "crs_invalido": crs_invalido,
+            "sin_adm3": sin_adm3,
+            "errores": len(errores_emp),
+            "errors_csv": str(err_csv_path) if err_csv_path else None,
+        })
+
+    # Resumen final
+    t_total = sum(r["total"] for r in resumen_empresas)
+    t_escritos = sum(r["escritos"] for r in resumen_empresas)
+    t_errores = sum(r["errores"] for r in resumen_empresas)
+
+    print(f"\n{'='*80}")
+    print(f"  RESUMEN CONTROL DE CALIDAD GEOFARMER")
+    print(f"{'='*80}")
+    for r in resumen_empresas:
+        icono = "✅" if r["errores"] == 0 else "⚠️"
+        print(
+            f"  {icono} {r['empresa']:25s} | total: {r['total']:>4} | OK: {r['escritos']:>4}"
+            f" | sin código: {r['sin_codigo']:>3} | ceros: {r['codigo_ceros']:>3}"
+            f" | sin geom: {r['sin_geometria']:>3} | CRS: {r['crs_invalido']:>3}"
+            f" | sin ADM3: {r['sin_adm3']:>3}"
+        )
+        if r["errors_csv"]:
+            print(f"     📄 {r['errors_csv']}")
+    print(f"  {'─'*76}")
+    print(f"  TOTAL: {t_total} procesados | {t_escritos} válidos | {t_errores} con problemas")
+    print(f"  Salida: {out_path}")
+    print(f"{'='*80}")
+
 
 if __name__ == "__main__":
     procesar()
