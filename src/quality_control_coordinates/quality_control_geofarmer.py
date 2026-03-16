@@ -320,28 +320,65 @@ def _find_adm3_code(geom, adm3_gdf, code_col):
 
 # ========= CENTROIDE =========
 
+def _extract_polygon_parts(geom):
+    """Extrae todas las partes poligonales de una geometría compuesta."""
+    if geom is None or geom.is_empty:
+        return []
+
+    gtype = geom.geom_type
+    if gtype == "Polygon":
+        return [geom]
+    if gtype == "MultiPolygon":
+        return [g for g in geom.geoms if not g.is_empty]
+    if gtype == "GeometryCollection":
+        parts = []
+        for g in geom.geoms:
+            parts.extend(_extract_polygon_parts(g))
+        return parts
+    return []
+
+
+def _largest_polygon(geom):
+    """
+    Devuelve el polígono más grande dentro de una geometría.
+
+    Esto evita centroides fuera del área cuando hay multipolígonos separados.
+    """
+    polygons = _extract_polygon_parts(geom)
+    if not polygons:
+        return None
+    return max(polygons, key=lambda p: p.area)
+
 def _resolve_centroid(geom, props):
     """
-    Determina lat, lon del centroide:
+    Determina lat, lon del centroide usando el polígono más grande:
       1. Si props["centroid"] existe y es [lon, lat], verifica que caiga
-         dentro de la geometría.
+         dentro del polígono principal.
       2. Si cae dentro → lo usa.
-      3. Si no cae dentro o no existe → calcula desde geom.centroid.
+      3. Si no cae dentro o no existe → calcula desde el centroide del
+         polígono más grande.
 
     Returns:
         (latitude, longitude)
     """
+    target_geom = _largest_polygon(geom)
+    if target_geom is None:
+        # Fallback defensivo
+        c = geom.centroid
+        return float(c.y), float(c.x)
+
     centroid_raw = props.get("centroid")
     if centroid_raw and isinstance(centroid_raw, (list, tuple)) and len(centroid_raw) >= 2:
         try:
             lon, lat = float(centroid_raw[0]), float(centroid_raw[1])
             pt = Point(lon, lat)
-            if geom.contains(pt):
+            # covers acepta puntos en borde; contains no.
+            if target_geom.covers(pt):
                 return lat, lon
         except (ValueError, TypeError):
             pass
-    # Calcular desde geometría
-    c = geom.centroid
+    # Calcular desde el polígono principal
+    c = target_geom.centroid
     return float(c.y), float(c.x)
 
 
@@ -375,33 +412,40 @@ def _area_hectares(geom):
 
 def _replace_geometry_in_geojson(geojson_obj, geom_4326):
     """
-    Reemplaza todas las geometrías en el GeoJSON con la geometría reproyectada.
-    Convierte la geometría Shapely a formato GeoJSON dict.
-    También actualiza el CRS a EPSG:4326 (o lo elimina, ya que WGS84 es el default).
-    Modifica el dict in-place y lo devuelve.
+    Normaliza el GeoJSON a un solo feature con la geometría unificada/reproyectada.
+
+    Esto asegura que, si llegan múltiples features, el resultado de QC siempre
+    sea un FeatureCollection de 1 feature con la unión total de la finca.
+
+    También actualiza el CRS explícitamente a EPSG:4326.
     """
     from shapely.geometry import mapping
-    
+
     geom_dict = mapping(geom_4326)
-    
+
+    # Tomar properties del primer feature existente (si hay), para no perder metadatos
+    base_properties = {}
     if geojson_obj.get("type") == "FeatureCollection":
         features = geojson_obj.get("features", [])
-        # Si hay múltiples features, reemplazamos todas con la geometría unificada
-        for feat in features:
-            feat["geometry"] = geom_dict
+        if features:
+            base_properties = dict(features[0].get("properties", {}))
     elif geojson_obj.get("type") == "Feature":
-        geojson_obj["geometry"] = geom_dict
-    
-    # Actualizar o eliminar el campo CRS
-    # Opción 1: Eliminar (EPSG:4326 es default en GeoJSON RFC 7946)
-    #geojson_obj.pop("crs", None)
-    
-    # Opción 2 alternativa: Establecer explícitamente a EPSG:4326
+        base_properties = dict(geojson_obj.get("properties", {}))
+
+    # Construir salida con un único feature
+    geojson_obj["type"] = "FeatureCollection"
+    geojson_obj["features"] = [{
+        "type": "Feature",
+        "properties": base_properties,
+        "geometry": geom_dict
+    }]
+
+    # Actualizar CRS explícitamente
     geojson_obj["crs"] = {
         "type": "name",
         "properties": {"name": "urn:ogc:def:crs:EPSG::4326"}
     }
-    
+
     return geojson_obj
 
 
@@ -545,8 +589,6 @@ def procesar(input_dir: str = None, output_dir: str = None, adm3_shp: str = None
                     continue
                 elif geom_msg:
                     # Geometría OK pero hubo reproyección → advertencia
-                    # IMPORTANTE: reemplazar geometrías en el GeoJSON con la reproyectada
-                    data = _replace_geometry_in_geojson(data, geom)
                     crs_convertido += 1
                     errores_emp.append({
                         "empresa": empresa,
@@ -557,6 +599,10 @@ def procesar(input_dir: str = None, output_dir: str = None, adm3_shp: str = None
                         "tipo": "advertencia",
                         "error": geom_msg
                     })
+
+                # Normalizar SIEMPRE a un único feature con geometría unificada
+                # (cubre casos de múltiples features y/o multipolígonos).
+                data = _replace_geometry_in_geojson(data, geom)
 
                 # 4) Buscar código ADM3 vía spatial join
                 adm3_code = _find_adm3_code(geom, adm3_gdf, code_col)

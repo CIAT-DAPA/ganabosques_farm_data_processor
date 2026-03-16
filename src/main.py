@@ -10,9 +10,13 @@ from ganabosques_orm.enums.farmsource import FarmSource
 from ganabosques_orm.enums.valuechain import ValueChain
 
 # ====== SAGARI ======
+# Paso 1: obtener datos desde Excel (importa el módulo completo)
 from get_data import get_data_sagari
+# Paso 2: control de calidad (código externo, CRS, geometría, ADM3, centroide, área)
 from quality_control_coordinates.quality_control_coordinates import quality_control_coordinates
+# Paso 3: calcular buffers (lee coordenadas validadas, genera buffers, guarda shapefiles)
 from polygons_buffers.polygons_buffers import buffer as make_buffers
+# Paso 4: guardar en MongoDB (lee shapefiles con buffers, guarda farms con geometría de buffer)
 from save_farm.save_farm import save_farm as save_farm_sagari
 
 # ====== GEOFARMER ======
@@ -43,7 +47,12 @@ logger = logging.getLogger("main")
 
 # ============= PIPELINES =============
 def run_sagari(selected_steps=None, value_chain: ValueChain = None):
-    """Pipeline SAGARI con 4 pasos."""
+    """Pipeline SAGARI con 4 pasos.
+        1) Obtener datos desde Excel (importa el módulo completo)
+        2) Control de calidad (código externo, CRS, geometría, ADM3, centroide, área)
+        3) Calcular buffers (lee coordenadas validadas, genera buffers, guarda shapefiles)
+        4) Guardar en MongoDB (lee shapefiles con buffers, guarda farms con geometría de buffer)
+    """
     workspace     = config['GEO_WORKSPACE']
     url_geoserver = config['URL_GEO']
     store         = config['GEO_STORE']
