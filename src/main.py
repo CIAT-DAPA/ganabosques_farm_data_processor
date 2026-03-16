@@ -136,7 +136,7 @@ def run_geofarmer(selected_steps=None, value_chain: ValueChain = None):
     # Paso 1
     if selected_steps is None or 1 in selected_steps:
         log_print(logger, "Paso 1 (GEOFARMER): Descargando datos desde la API…")
-        fetch_geofarmer_api.main(output_dir=output_api)
+        fetch_geofarmer_api.main(output_dir=output_api, value_chain=value_chain.value if value_chain else None)
 
     # Paso 2
     if selected_steps is None or 2 in selected_steps:

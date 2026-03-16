@@ -13,7 +13,7 @@ logger = logging.getLogger("get_data_geofarmer")
 
 # === VARIABLES DESDE CONFIG ===
 BASE_URL = config["GEOFARMER_BASE_URL"]
-CLIENTS = config["GEOFARMER_CLIENTS"]
+CHANNELS = config.get("GEOFARMER_CHANNELS", {})
 
 
 # === FUNCIONES ===
@@ -196,21 +196,57 @@ def process_company(name, creds, output_dir, errors_dir):
     return stats
 
 
-def main(output_dir: str = None, errors_dir: str = None):
+def _select_channels_by_value_chain(value_chain: str | None):
+    """
+    Filtra canales de GeoFarmer por cadena de valor.
+
+    Args:
+        value_chain: "livestock", "cacao" o None.
+
+    Returns:
+        dict con canales filtrados.
+    """
+    if not CHANNELS:
+        return {}
+
+    if value_chain is None:
+        return CHANNELS
+
+    vc = str(value_chain).strip().lower()
+    selected = {
+        name: {
+            "CLIENT_ID": meta.get("CLIENT_ID"),
+            "CLIENT_SECRET": meta.get("CLIENT_SECRET"),
+            "VALUE_CHAIN": meta.get("VALUE_CHAIN"),
+        }
+        for name, meta in CHANNELS.items()
+        if str(meta.get("VALUE_CHAIN", "")).strip().lower() == vc
+    }
+    return selected
+
+
+def main(output_dir: str = None, errors_dir: str = None, value_chain: str = None):
     if output_dir is None:
         output_dir = config.get("GEOFARMER_OUTPUT_API", "geofarmer_output")
     if errors_dir is None:
         errors_dir = os.path.join(output_dir, "_errores")
     os.makedirs(output_dir, exist_ok=True)
 
+    selected_channels = _select_channels_by_value_chain(value_chain)
+    if not selected_channels:
+        raise ValueError(
+            f"No hay canales GeoFarmer configurados para value_chain='{value_chain}'."
+        )
+
     print(f"\n{'='*60}")
     print(f"  DESCARGA DE DATOS GEOFARMER")
-    print(f"  Empresas: {', '.join(CLIENTS.keys())}")
+    print(f"  Value chain: {value_chain or 'todas'}")
+    print(f"  Empresas: {', '.join(selected_channels.keys())}")
     print(f"  Salida:   {output_dir}")
     print(f"{'='*60}")
 
     resultados = []
-    for company, creds in CLIENTS.items():
+    for company, creds in selected_channels.items():
         stats = process_company(company, creds, output_dir, errors_dir)
         resultados.append(stats)
 

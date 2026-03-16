@@ -27,23 +27,46 @@ config['SAGARI_CSV_PATH'] = os.getenv("SAGARI_CSV_PATH")
 # === API GeoFarmer ===
 config['GEOFARMER_BASE_URL'] = os.getenv("GEOFARMER_BASE_URL")
 
-config['GEOFARMER_CLIENTS'] = {
+config['GEOFARMER_CHANNELS'] = {
     "Colacteos": {
+        "VALUE_CHAIN": "livestock",
         "CLIENT_ID": os.getenv("COLACTEOS_CLIENT_ID"),
         "CLIENT_SECRET": os.getenv("COLACTEOS_CLIENT_SECRET")
     },
     "Lacteos_del_Hogar": {
+        "VALUE_CHAIN": "livestock",
         "CLIENT_ID": os.getenv("LACTEOS_DEL_HOGAR_CLIENT_ID"),
         "CLIENT_SECRET": os.getenv("LACTEOS_DEL_HOGAR_CLIENT_SECRET")
     },
     "Carnatural": {
+        "VALUE_CHAIN": "livestock",
         "CLIENT_ID": os.getenv("CARNATURAL_CLIENT_ID"),
         "CLIENT_SECRET": os.getenv("CARNATURAL_CLIENT_SECRET")
     },
     "Fedegwa": {
+        "VALUE_CHAIN": "livestock",
         "CLIENT_ID": os.getenv("FEDEGWA_CLIENT_ID"),
         "CLIENT_SECRET": os.getenv("FEDEGWA_CLIENT_SECRET")
+    },
+    "Okanta": {
+        "VALUE_CHAIN": "cacao",
+        "CLIENT_ID": os.getenv("OKANTA_CLIENT_ID"),
+        "CLIENT_SECRET": os.getenv("OKANTA_CLIENT_SECRET")
+    },
+    "Nacional_de_Chocolates": {
+        "VALUE_CHAIN": "cacao",
+        "CLIENT_ID": os.getenv("NACIONAL_CHOCOLATES_CLIENT_ID"),
+        "CLIENT_SECRET": os.getenv("NACIONAL_CHOCOLATES_CLIENT_SECRET")
     }
+}
+
+# Compatibilidad: diccionario de credenciales sin metadatos
+config['GEOFARMER_CLIENTS'] = {
+    name: {
+        "CLIENT_ID": channel.get("CLIENT_ID"),
+        "CLIENT_SECRET": channel.get("CLIENT_SECRET"),
+    }
+    for name, channel in config['GEOFARMER_CHANNELS'].items()
 }
 
 # === Constantes ganaderas ===
