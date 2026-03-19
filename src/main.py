@@ -204,8 +204,11 @@ if __name__ == "__main__":
     )
 
     parser.add_argument(
-        "-v", "--value_chain", type=str, required=True, choices=[valuevc.value for valuevc in ValueChain],
-        help=f"Cadena de valor: {', '.join([valuevc.value for valuevc in ValueChain])}"
+        "-v", "--value_chain", type=str, required=False, choices=[valuevc.value for valuevc in ValueChain],
+        help=(
+            f"Cadena de valor (opcional con source GEOFARMER): {', '.join([valuevc.value for valuevc in ValueChain])}. "
+            "Si no se envía para GEOFARMER, se procesan todos los canales."
+        )
     )
 
     parser.add_argument(
@@ -223,7 +226,10 @@ if __name__ == "__main__":
         raise ValueError("No se puede usar --process y --from_step al mismo tiempo. Usa solo uno.")
 
     source_enum = FarmSource(args.source)
-    value_chain_enum = ValueChain(args.value_chain)
+    value_chain_enum = ValueChain(args.value_chain) if args.value_chain else None
+
+    if source_enum == FarmSource.SAGARI and value_chain_enum is None:
+        raise ValueError("Para SAGARI debes indicar --value_chain.")
 
     if args.from_step is not None:
         max_step = 4 if source_enum == FarmSource.SAGARI else 3
