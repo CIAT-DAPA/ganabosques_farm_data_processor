@@ -14,6 +14,7 @@ El paso 2 (quality_control_geofarmer) ya se encargó de:
 """
 import os
 import json
+import argparse
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -22,6 +23,7 @@ from tqdm import tqdm
 import pandas as pd
 from shapely.geometry import shape
 from shapely.ops import unary_union
+from mongoengine import connect
 
 # ===== ORM =====
 from ganabosques_orm.collections.farm import Farm
@@ -164,8 +166,16 @@ def extract_single_geofarmer_id(geojson_obj: dict) -> str:
 
 
 def get_adm3_doc_from_code(code: str):
-    """Busca documento Adm3 por ext_id."""
-    return Adm3.objects(ext_id=code).only("id", "ext_id").first()
+    """Busca documento Adm3 por ext_id, preservando ceros a la izquierda."""
+    raw = str(code).strip()
+    doc = Adm3.objects(ext_id=raw).only("id", "ext_id").first()
+    if doc:
+        return doc
+
+    normalized = raw.lstrip("0")
+    if not normalized:
+        normalized = "0"
+    return Adm3.objects(ext_id=normalized).only("id", "ext_id").first()
 
 
 def infer_value_chain_from_filepath(filepath: str) -> ValueChain | None:
@@ -334,13 +344,22 @@ def upsert_one(filepath: str, errores: list, report_rows: list, stats: dict, val
             existing_codes = {(e.source, e.ext_code) for e in farm.ext_id}
             changed = False
 
+            # Robustez: algunos Farms históricos podrían no traer log embebido.
+            if not getattr(farm, "log", None):
+                now = datetime.now()
+                farm.log = Log(enable=True, created=now, updated=now)
+                changed = True
+
             if (Source.GEOFARMER_ID, geofarmer_id) not in existing_codes:
                 farm.ext_id.append(ExtIdFarm(source=Source.GEOFARMER_ID, ext_code=geofarmer_id))
                 changed = True
 
             if farm_code and (external_source, farm_code) not in existing_codes:
-                farm.ext_id.append(ExtIdFarm(source=external_source, ext_code=farm_code))
-                changed = True
+                # Si el código externo ya está asociado a otro Farm, no anexarlo
+                # para evitar colisiones de unicidad. Se preserva identidad por GEOFARMER_ID.
+                if not (farm_by_external and str(farm_by_external.id) != str(farm.id)):
+                    farm.ext_id.append(ExtIdFarm(source=external_source, ext_code=farm_code))
+                    changed = True
 
             if farm.farm_source != FarmSource.GEOFARMER:
                 farm.farm_source = FarmSource.GEOFARMER
@@ -505,7 +524,7 @@ def run(polygons_dir: str, errors_out_dir: str | None = None, value_chain: Value
             ok += 1
 
     for line in logs:
-        log_print(logger, line)
+        logger.info(line)
 
     log_print(logger, f"✅ Hechos: {ok} | ❌ Errores: {len(errores)}")
     log_print(logger, "—— Resumen —————————————————————————————————")
@@ -527,9 +546,6 @@ def run(polygons_dir: str, errors_out_dir: str | None = None, value_chain: Value
 
 
 if __name__ == "__main__":
-    import argparse
-    from mongoengine import connect
-
     connect(db=config['MONGO_DB_NAME'], host=config['MONGO_URI'])
     parser = argparse.ArgumentParser(description="Guardar farms GEOFARMER en MongoDB")
     parser.add_argument("--polygons-dir", required=True, help="Carpeta con GeoJSONs validados del paso 2")

@@ -30,13 +30,11 @@ from datetime import datetime
 
 import geopandas as gpd
 import pandas as pd
-from shapely.geometry import shape, Point, Polygon, MultiPolygon
-from shapely.ops import unary_union
+from shapely.geometry import shape, Point, Polygon, MultiPolygon, mapping
+from shapely.ops import unary_union, transform as shapely_transform
 from shapely.validation import make_valid
 from pyproj import Geod, Transformer
 from tqdm import tqdm
-
-from config import config
 
 logger = logging.getLogger("quality_control_geofarmer")
 
@@ -136,7 +134,6 @@ def _get_transformer(src_epsg: int) -> Transformer:
 
 def _transform_geom_to_4326(geom, src_epsg: int):
     """Reproyecta geometría de src_epsg a EPSG:4326 vía shapely transform."""
-    from shapely.ops import transform as shapely_transform
     transformer = _get_transformer(src_epsg)
     func = lambda x, y, z=None: transformer.transform(x, y)
     return shapely_transform(func, geom)
@@ -419,8 +416,6 @@ def _replace_geometry_in_geojson(geojson_obj, geom_4326):
 
     También actualiza el CRS explícitamente a EPSG:4326.
     """
-    from shapely.geometry import mapping
-
     geom_dict = mapping(geom_4326)
 
     # Tomar properties del primer feature existente (si hay), para no perder metadatos

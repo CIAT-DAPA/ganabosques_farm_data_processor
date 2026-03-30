@@ -1,1 +1,3 @@
-from .quality_control_coordinates import  quality_control_coordinates
+from .quality_control_coordinates import quality_control_coordinates as run_quality_control_coordinates
+
+__all__ = ["run_quality_control_coordinates"]

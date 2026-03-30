@@ -61,7 +61,7 @@ def process_farm_file(csv_path, geojson_folder, output_path_save, farmsource=Non
 
     polygon_index = {
         str(p.farm_id.id): p
-        for p in FarmPolygons.objects.only("farm_id", "geojson", "latitude", "longitud", "farm_ha", "radio", "buffer_inputs").no_dereference()
+        for p in FarmPolygons.objects.only("farm_id", "geojson", "latitude", "longitud", "farm_ha", "radio", "buffer_inputs", "log").no_dereference()
     }
 
     farm_source = farm_source_csv(csv_path)
@@ -166,6 +166,8 @@ def process_farm_file(csv_path, geojson_folder, output_path_save, farmsource=Non
                     polygon_existente.farm_ha = ha
                     polygon_existente.radio = radio
                     polygon_existente.buffer_inputs = buffer_inputs
+                    if getattr(polygon_existente, "log", None) is None:
+                        polygon_existente.log = Log(enable=True, created=datetime.now(), updated=datetime.now())
                     polygon_existente.log.updated = datetime.now()
                     polygon_existente.save()
                     polygon_actualizados += 1
@@ -227,7 +229,7 @@ def save_farm(csv_folder_path, output_path_save, value_chain: ValueChain):
         if filename.endswith(".csv"):
             csv_path = os.path.join(csv_folder_path, filename)
             print(f"📄 Procesando archivo: {csv_path}")
-            process_farm_file(csv_path, geojson_folder, output_path_save, value_chain)
+            process_farm_file(csv_path, geojson_folder, output_path_save, value_chain=value_chain)
 
 def generar_ugg_map(df_columns):
     ugg_map = {}
