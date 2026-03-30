@@ -3,6 +3,7 @@ from dotenv import load_dotenv
 from ganabosques_orm.enums.species import Species
 from ganabosques_orm.enums.ugg import UGG
 from ganabosques_orm.enums.farmsource import FarmSource
+from ganabosques_orm.enums.source import Source
 
 load_dotenv()
 
@@ -21,38 +22,58 @@ config['MONGO_DB_NAME'] = os.getenv("MONGO_DB_NAME")
 config['DATA'] = os.getenv("DATA")
 
 # === Rutas ===
-config['GEOFARMER_POLYGONS_DIR'] = os.getenv("GEOFARMER_POLYGONS_DIR")
-config['GEOFARMER_ERRORS_DIR'] = os.getenv("GEOFARMER_ERRORS_DIR")
-config['GEOFARMER_INPUT_TODOS'] = os.getenv("GEOFARMER_INPUT_TODOS")
-config['GEOFARMER_OUTPUT_API'] = os.getenv("GEOFARMER_OUTPUT_API")
 config['ADM3_SHP_PATH'] = os.getenv("ADM3_SHP_PATH")
 config['SAGARI_CSV_PATH'] = os.getenv("SAGARI_CSV_PATH")
-
-config['GEOFARMER_OUTPUT_POLYGONS'] = (
-    os.getenv("GEOFARMER_OUTPUT_POLYGONS") or
-    config['GEOFARMER_POLYGONS_DIR']
-)
 
 # === API GeoFarmer ===
 config['GEOFARMER_BASE_URL'] = os.getenv("GEOFARMER_BASE_URL")
 
-config['GEOFARMER_CLIENTS'] = {
+config['GEOFARMER_CHANNELS'] = {
     "Colacteos": {
+        "VALUE_CHAIN": "livestock",
+        "EXTERNAL_SOURCE": Source.SIT_CODE.value,
         "CLIENT_ID": os.getenv("COLACTEOS_CLIENT_ID"),
         "CLIENT_SECRET": os.getenv("COLACTEOS_CLIENT_SECRET")
     },
     "Lacteos_del_Hogar": {
+        "VALUE_CHAIN": "livestock",
+        "EXTERNAL_SOURCE": Source.SIT_CODE.value,
         "CLIENT_ID": os.getenv("LACTEOS_DEL_HOGAR_CLIENT_ID"),
         "CLIENT_SECRET": os.getenv("LACTEOS_DEL_HOGAR_CLIENT_SECRET")
     },
     "Carnatural": {
+        "VALUE_CHAIN": "livestock",
+        "EXTERNAL_SOURCE": Source.SIT_CODE.value,
         "CLIENT_ID": os.getenv("CARNATURAL_CLIENT_ID"),
         "CLIENT_SECRET": os.getenv("CARNATURAL_CLIENT_SECRET")
     },
     "Fedegwa": {
+        "VALUE_CHAIN": "livestock",
+        "EXTERNAL_SOURCE": Source.SIT_CODE.value,
         "CLIENT_ID": os.getenv("FEDEGWA_CLIENT_ID"),
         "CLIENT_SECRET": os.getenv("FEDEGWA_CLIENT_SECRET")
+    },
+    "Okanta": {
+        "VALUE_CHAIN": "cacao",
+        "EXTERNAL_SOURCE": Source.PRODUCER_ID.value,
+        "CLIENT_ID": os.getenv("OKANTA_CLIENT_ID"),
+        "CLIENT_SECRET": os.getenv("OKANTA_CLIENT_SECRET")
+    },
+    "Nacional_de_Chocolates": {
+        "VALUE_CHAIN": "cacao",
+        "EXTERNAL_SOURCE": Source.PRODUCER_ID.value,
+        "CLIENT_ID": os.getenv("NACIONAL_CHOCOLATES_CLIENT_ID"),
+        "CLIENT_SECRET": os.getenv("NACIONAL_CHOCOLATES_CLIENT_SECRET")
     }
+}
+
+# Compatibilidad: diccionario de credenciales sin metadatos
+config['GEOFARMER_CLIENTS'] = {
+    name: {
+        "CLIENT_ID": channel.get("CLIENT_ID"),
+        "CLIENT_SECRET": channel.get("CLIENT_SECRET"),
+    }
+    for name, channel in config['GEOFARMER_CHANNELS'].items()
 }
 
 # === Constantes ganaderas ===

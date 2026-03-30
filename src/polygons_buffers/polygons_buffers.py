@@ -10,7 +10,6 @@ from ganabosques_orm.enums.ugg import UGG
 from ganabosques_orm.enums.source import Source
 
 from config import config
-from mongoengine import connect
 from mongoengine.connection import get_db
 from ganabosques_orm.collections.adm1 import Adm1
 
@@ -77,7 +76,6 @@ def buffer(path_input, path_output, source):
     )
 
     # 4) Equivalencias UGG/ha por departamento desde Mongo (Adm1)
-    connect(db=config['MONGO_DB_NAME'], host=config['MONGO_URI'])
 
     # Intento 1: usando el modelo (si el campo se llama 'ugg_size' correctamente)
     try:
@@ -90,7 +88,7 @@ def buffer(path_input, path_output, source):
     except Exception:
         # Fallback: leer crudo permitiendo el campo con espacio ' ugg_size'
         db = get_db()
-        raw = list(db[Adm1._get_collection_name()].find({}, {"ext_id": 1, "ugg_size": 1, " ugg_size": 1}))
+        raw = list(db[Adm1._get_collection_name()].find({}, {"ext_id": 1, "ugg_size": 1, "ugg_size": 1}))
         rows = []
         for doc in raw:
             val = doc.get("ugg_size", None)

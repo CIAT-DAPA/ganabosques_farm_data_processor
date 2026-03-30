@@ -1,18 +1,28 @@
 # -*- coding: utf-8 -*-
+"""
+Paso 3 GEOFARMER: Guardar farms y polígonos en MongoDB.
+
+Lee GeoJSONs validados del paso 2 (ya contienen adm3_code, latitude,
+longitude, farm_ha en las properties) y los persiste en MongoDB
+como documentos Farm + FarmPolygons.
+
+El paso 2 (quality_control_geofarmer) ya se encargó de:
+  - Validar geometría / CRS
+  - Buscar código ADM3 vía spatial join
+  - Verificar / calcular centroide
+  - Calcular área en hectáreas
+"""
 import os
-import re
 import json
+import argparse
 import logging
 from datetime import datetime
-from functools import partial
+from pathlib import Path
 
 from tqdm import tqdm
 import pandas as pd
-import geopandas as gpd
 from shapely.geometry import shape
-from shapely.ops import unary_union, transform as shapely_transform
-from shapely.validation import make_valid
-from pyproj import Transformer, Geod
+from shapely.ops import unary_union
 from mongoengine import connect
 
 # ===== ORM =====
@@ -23,36 +33,65 @@ from ganabosques_orm.auxiliaries.log import Log
 from ganabosques_orm.enums.farmsource import FarmSource
 from ganabosques_orm.enums.source import Source
 from ganabosques_orm.collections.adm3 import Adm3
+from ganabosques_orm.enums.valuechain import ValueChain
 
 from config import config
 from tools.log_print import log_print
 
-# ========= DB & LOG =========
-connect(db=config['MONGO_DB_NAME'], host=config['MONGO_URI'])
-logger = logging.getLogger("GEOFARMER solo polígonos + ADM3 (4326)")
-logger.setLevel(logging.INFO)
+# ========= LOG =========
+logger = logging.getLogger("save_farm_geofarmer")
 
-# ========= RUTAS DESDE CONFIG (.env) =========
-POLYGONS_DIR     = os.path.normpath(config['GEOFARMER_POLYGONS_DIR'])
-ADM3_SHP_PATH    = os.path.normpath(config['ADM3_SHP_PATH'])
-OUTPUT_ERRORS_DIR= os.path.normpath(config['GEOFARMER_ERRORS_DIR'])
 
-ADM3_CODE_CANDIDATES = ["ext_id", "cod_ver", "ADM3_CODE", "ADM3", "MPIO_CCDGO", "DPTOMPIO", "CODIGO", "CODE"]
+def _channels_config() -> dict:
+    return config.get("GEOFARMER_CHANNELS", {}) or {}
+
+
+def _channel_metadata_from_name(channel_name: str) -> dict:
+    """Busca metadata de canal de forma case-insensitive."""
+    channels = _channels_config()
+    if channel_name in channels:
+        return channels[channel_name]
+
+    cl = channel_name.strip().lower()
+    for name, meta in channels.items():
+        if name.strip().lower() == cl:
+            return meta
+    return {}
+
+
+def _resolve_value_chain(value_chain_raw: str | None) -> ValueChain | None:
+    if not value_chain_raw:
+        return None
+    v = str(value_chain_raw).strip().lower()
+    try:
+        return ValueChain(v)
+    except Exception:
+        return None
+
+
+def _resolve_external_source(source_raw: str | None, value_chain: ValueChain | None) -> Source:
+    """
+    Resuelve Source a partir de configuración de canal.
+    Acepta nombre de enum (SIT_CODE) o valor del enum.
+    """
+    if source_raw:
+        s = str(source_raw).strip()
+        try:
+            return Source[s]
+        except Exception:
+            pass
+        try:
+            return Source(s)
+        except Exception:
+            pass
+
+    # Fallback por cadena de valor
+    if value_chain == ValueChain.CACAO:
+        return Source.PRODUCER_ID
+    return Source.SIT_CODE
+
 
 # ========= HELPERS =========
-RE_CODE = re.compile(r"(\d+)", re.IGNORECASE)
-
-# Transformer for 3116 -> 4326 (used only if input geometries appear projected)
-TRANS_3116_TO_4326 = Transformer.from_crs(3116, 4326, always_xy=True)
-TRANS_4326_TO_3116 = Transformer.from_crs(4326, 3116, always_xy=True)
-
-# Geod for area calculation on WGS84
-GEOD = Geod(ellps="WGS84")
-
-def extract_code_from_filename(fname: str) -> str | None:
-    name = os.path.splitext(os.path.basename(fname))[0]
-    m = RE_CODE.search(name)
-    return m.group(1) if m else None
 
 def load_geojson(filepath: str) -> dict:
     with open(filepath, "r", encoding="utf-8") as f:
@@ -61,332 +100,455 @@ def load_geojson(filepath: str) -> dict:
         raise ValueError("GeoJSON inválido (no es dict)")
     return data
 
-def transform_shapely_geom(geom, transformer: Transformer):
-    # returns transformed shapely geometry via shapely_transform
-    func = lambda x, y, z=None: transformer.transform(x, y)
-    return shapely_transform(func, geom)
 
-def ensure_geom_4326(geom):
+def extract_first_properties(geojson_obj: dict) -> dict:
+    """Extrae properties del primer Feature."""
+    if geojson_obj.get("type") == "FeatureCollection":
+        features = geojson_obj.get("features", [])
+        if features:
+            return features[0].get("properties", {})
+    elif geojson_obj.get("type") == "Feature":
+        return geojson_obj.get("properties", {})
+    return {}
+
+
+def extract_channel_from_filepath(filepath: str) -> str:
+    """Extrae nombre de canal desde carpeta padre del archivo .geojson."""
+    return Path(filepath).parent.name.strip()
+
+
+def extract_geofarmer_ids(geojson_obj: dict) -> set:
+    """Extrae los IDs de GeoFarmer del GeoJSON (farm_id/FARM_ID)."""
+    ids = set()
+    features = []
+    if geojson_obj.get("type") == "FeatureCollection":
+        features = geojson_obj.get("features", [])
+    elif geojson_obj.get("type") == "Feature":
+        features = [geojson_obj]
+    for feat in features:
+        props = feat.get("properties", {})
+        fid = props.get("farm_id", "") or props.get("FARM_ID", "")
+        if fid:
+            ids.add(str(fid))
+    return ids
+
+
+def normalize_external_code(raw_value) -> str:
     """
-    Asegura que geom esté en EPSG:4326.
-    Heurística:
-      - Si bounds indican coordenadas pequeñas (<=180) assume lon/lat → ya 4326.
-      - Si bounds muestran valores grandes (>180) asumimos que está proyectado (ej. 3116)
-        y lo reproyectamos a 4326.
-    Devuelve geometría en 4326 o None.
+    Normaliza el código externo.
+
+    Valores vacíos o equivalentes a nulos (None, null, nan, etc.)
+    se consideran "sin código".
     """
-    if geom is None or geom.is_empty:
-        return None
+    if raw_value is None:
+        return ""
+    value = str(raw_value).strip()
+    if not value:
+        return ""
+    if value.lower() in {"none", "null", "nan", "na", "n/a", "sin dato"}:
+        return ""
+    return value
 
-    try:
-        geom = make_valid(geom)
-    except Exception:
-        try:
-            geom = geom.buffer(0)
-        except Exception:
-            pass
 
-    minx, miny, maxx, maxy = geom.bounds
-    max_abs = max(abs(minx), abs(miny), abs(maxx), abs(maxy))
-
-    if max_abs > 180:
-        # parece proyectado en metros (p. ej. 3116) -> reproyectar a 4326
-        try:
-            geom4326 = transform_shapely_geom(geom, TRANS_3116_TO_4326)
-            return geom4326
-        except Exception as e:
-            raise RuntimeError(f"Fallo al reproyectar geom proyectada a 4326: {e}")
-    else:
-        # ya está en lon/lat => dejamos
-        return geom
-
-def union_geom_4326(geojson_obj):
+def extract_single_geofarmer_id(geojson_obj: dict) -> str:
     """
-    Une las geometrías del GeoJSON y entrega una geometría en EPSG:4326.
-    Acepta FeatureCollection, Feature o geom simple.
+    Extrae un único GEOFARMER_ID del GeoJSON.
+    Regla de negocio: 1 Farm == 1 geofarmer_id.
     """
-    try:
-        if geojson_obj.get("type") == "FeatureCollection":
-            geoms = []
-            for feat in geojson_obj.get("features", []):
-                geom = shape(feat.get("geometry"))
-                try:
-                    geom = make_valid(geom)
-                except Exception:
-                    geom = geom.buffer(0)
-                geom4326 = ensure_geom_4326(geom)
-                if geom4326 is not None and not geom4326.is_empty:
-                    geoms.append(geom4326)
-            if not geoms:
-                return None
-            return unary_union(geoms)
-        elif geojson_obj.get("type") == "Feature":
-            geom = shape(geojson_obj.get("geometry"))
-            try:
-                geom = make_valid(geom)
-            except Exception:
-                geom = geom.buffer(0)
-            return ensure_geom_4326(geom)
-        else:
-            geom = shape(geojson_obj)
-            try:
-                geom = make_valid(geom)
-            except Exception:
-                geom = geom.buffer(0)
-            return ensure_geom_4326(geom)
-    except Exception as e:
-        raise RuntimeError(f"Error al unir/transformar geometrías a 4326: {e}")
+    ids = extract_geofarmer_ids(geojson_obj)
+    if not ids:
+        raise ValueError("No se encontró farm_id/FARM_ID (GEOFARMER_ID) en properties")
+    if len(ids) > 1:
+        raise ValueError(
+            f"GeoJSON con múltiples GEOFARMER_ID para una misma finca: {sorted(ids)}"
+        )
+    return next(iter(ids))
 
-def centroid_wgs84_from_4326(geom4326):
-    """
-    Devuelve lat, lon (WGS84) del centroid en EPSG:4326
-    """
-    c = geom4326.centroid
-    return float(c.y), float(c.x)
-
-def area_hectares_from_4326(geom4326):
-    """
-    Calcula el área en hectáreas usando GEOD (área sobre elipsoide), entrada geom en lon/lat (4326).
-    Maneja polígonos y multipolígonos.
-    """
-    if geom4326 is None or geom4326.is_empty:
-        return 0.0
-    # Para MultiPolygons sumamos por parte
-    total_area_m2 = 0.0
-
-    def poly_area(polygon):
-        # exterior ring
-        lon, lat = polygon.exterior.coords.xy
-        lons = list(lon)
-        lats = list(lat)
-        area, perim = GEOD.polygon_area_perimeter(lons, lats)
-        a = abs(area)
-        # añadir agujeros (interiors) como restas
-        for interior in polygon.interiors:
-            ilon, ilat = interior.coords.xy
-            ia, ip = GEOD.polygon_area_perimeter(list(ilon), list(ilat))
-            a -= abs(ia)
-        return a
-
-    from shapely.geometry import Polygon, MultiPolygon
-    if isinstance(geom4326, Polygon):
-        total_area_m2 += poly_area(geom4326)
-    elif isinstance(geom4326, MultiPolygon):
-        for p in geom4326.geoms:
-            total_area_m2 += poly_area(p)
-    else:
-        # Si no es polígono, area 0
-        total_area_m2 = 0.0
-
-    return float(total_area_m2) / 10000.0  # hectáreas
-
-def load_adm3_gdf(shp_path: str) -> tuple[gpd.GeoDataFrame, str]:
-    """
-    Carga el shapefile ADM3 y lo convierte a EPSG:4326 (si necesario).
-    Devuelve gdf y el nombre de la columna de código encontrada.
-    """
-    gdf = gpd.read_file(shp_path)
-    if gdf.crs is None:
-        raise ValueError("El shapefile ADM3 no tiene CRS; asígnalo antes de usarlo.")
-    # reproyectar a 4326 (todo en 4326)
-    if gdf.crs.to_epsg() != 4326:
-        gdf = gdf.to_crs(epsg=4326)
-    code_col = None
-    for cand in ADM3_CODE_CANDIDATES:
-        if cand in gdf.columns:
-            code_col = cand
-            break
-    if not code_col:
-        raise ValueError(f"No se encontró columna de código ADM3 (probadas: {ADM3_CODE_CANDIDATES})")
-    gdf[code_col] = gdf[code_col].astype(str)
-    return gdf, code_col
-
-def find_adm3_code_for_geom(geom4326, adm3_gdf: gpd.GeoDataFrame, code_col: str) -> str | None:
-    """
-    Busca el código ADM3 para la geometría (todo en 4326):
-      - primero con centroid dentro (fast)
-      - luego por intersects con envelope y finalmente intersects
-    """
-    if geom4326 is None or geom4326.is_empty:
-        return None
-    try:
-        pt = gpd.GeoDataFrame(geometry=[geom4326.centroid], crs="EPSG:4326")
-        join1 = gpd.sjoin(pt, adm3_gdf[[code_col, "geometry"]], how="left", predicate="within")
-        if not join1.empty and pd.notna(join1.iloc[0][code_col]):
-            return str(join1.iloc[0][code_col])
-    except Exception:
-        pass
-
-    try:
-        poly = gpd.GeoDataFrame(geometry=[geom4326], crs="EPSG:4326")
-        candidates = adm3_gdf[adm3_gdf.intersects(geom4326.envelope)]
-        if candidates.empty:
-            return None
-        join2 = gpd.sjoin(poly, candidates[[code_col, "geometry"]], how="left", predicate="intersects")
-        if not join2.empty and pd.notna(join2.iloc[0][code_col]):
-            return str(join2.iloc[0][code_col])
-    except Exception:
-        return None
-    return None
 
 def get_adm3_doc_from_code(code: str):
-    return Adm3.objects(ext_id=code).only("id", "ext_id").first()
+    """Busca documento Adm3 por ext_id, preservando ceros a la izquierda."""
+    raw = str(code).strip()
+    doc = Adm3.objects(ext_id=raw).only("id", "ext_id").first()
+    if doc:
+        return doc
 
-# ========= NUEVO: helpers de política SAGARI -> GEOFARMER =========
-def delete_sagari_by_sit(sit_code: str) -> tuple[int, int]:
-    sagari_q = Farm.objects(
-        farm_source=FarmSource.SAGARI,
-        ext_id__match={'source': Source.SIT_CODE, 'ext_code': sit_code}
-    ).only("id")
-    sagari_ids = [f.id for f in sagari_q]
-    if not sagari_ids:
-        return 0, 0
-    polys_del = FarmPolygons.objects(farm_id__in=sagari_ids).delete()
-    farms_del = Farm.objects(id__in=sagari_ids).delete()
-    return farms_del, polys_del
+    normalized = raw.lstrip("0")
+    if not normalized:
+        normalized = "0"
+    return Adm3.objects(ext_id=normalized).only("id", "ext_id").first()
+
+
+def infer_value_chain_from_filepath(filepath: str) -> ValueChain | None:
+    """
+    Infiere cadena de valor por nombre de carpeta de canal.
+
+    Espera estructura: .../02_quality_control/<canal>/FARM_ID_xxx.geojson
+    """
+    try:
+        channel = extract_channel_from_filepath(filepath)
+        meta = _channel_metadata_from_name(channel)
+        return _resolve_value_chain(meta.get("VALUE_CHAIN"))
+    except Exception:
+        return None
+
+
+def infer_external_source_from_filepath(filepath: str, value_chain: ValueChain | None) -> Source:
+    """Infiere el Source del código externo según canal/config."""
+    channel = extract_channel_from_filepath(filepath)
+    meta = _channel_metadata_from_name(channel)
+    return _resolve_external_source(meta.get("EXTERNAL_SOURCE"), value_chain)
+
+
+def geometry_signature_from_geojson(geojson_obj: dict):
+    """Genera una geometría unificada para comparar únicamente geometría."""
+    geoms = []
+    if geojson_obj.get("type") == "FeatureCollection":
+        for feat in geojson_obj.get("features", []):
+            g = feat.get("geometry")
+            if g:
+                geoms.append(shape(g))
+    elif geojson_obj.get("type") == "Feature":
+        g = geojson_obj.get("geometry")
+        if g:
+            geoms.append(shape(g))
+    elif "type" in geojson_obj:
+        geoms.append(shape(geojson_obj))
+
+    if not geoms:
+        return None
+    return unary_union(geoms) if len(geoms) > 1 else geoms[0]
+
+
+def same_geometry(existing_geojson_str: str, new_geojson_obj: dict) -> bool:
+    """Compara si geometrías son equivalentes topológicamente."""
+    try:
+        existing_obj = json.loads(existing_geojson_str) if isinstance(existing_geojson_str, str) else existing_geojson_str
+        g_old = geometry_signature_from_geojson(existing_obj)
+        g_new = geometry_signature_from_geojson(new_geojson_obj)
+        if g_old is None or g_new is None:
+            return False
+        return g_old.equals(g_new)
+    except Exception:
+        return False
+
+
+def _farm_ext_codes(farm, source: Source) -> set:
+    """Retorna conjunto de códigos ext_id del farm para un Source específico."""
+    return {
+        e.ext_code
+        for e in getattr(farm, "ext_id", [])
+        if getattr(e, "source", None) == source and getattr(e, "ext_code", None)
+    }
+
+
+def _append_report_row(
+    report_rows: list,
+    *,
+    filepath: str,
+    channel_name: str,
+    value_chain: ValueChain | None,
+    geofarmer_id: str,
+    farm_code: str,
+    external_source: Source | None,
+    tipo: str,
+    farm_action: str,
+    poly_action: str,
+    message: str,
+    farm_id: str | None = None,
+):
+    report_rows.append({
+        "archivo": os.path.basename(filepath),
+        "canal": channel_name,
+        "value_chain": value_chain.value if value_chain else "",
+        "geofarmer_id": geofarmer_id,
+        "farm_code": farm_code,
+        "external_source": external_source.name if external_source else "",
+        "farm_action": farm_action,
+        "poly_action": poly_action,
+        "farm_id": farm_id or "",
+        "tipo": tipo,
+        "detalle": message,
+    })
+
 
 # ========== UPSERT ==========
 
-def upsert_one(filepath: str, adm3_gdf: gpd.GeoDataFrame, adm3_code_col: str, errores: list, stats: dict):
+def upsert_one(filepath: str, errores: list, report_rows: list, stats: dict, value_chain: ValueChain = None):
     try:
-        code = extract_code_from_filename(filepath)
-        if not code:
-            raise ValueError(f"No se pudo extraer código SIT del nombre: {os.path.basename(filepath)}")
-
         geojson_obj = load_geojson(filepath)
+        props = extract_first_properties(geojson_obj)
+        channel_name = extract_channel_from_filepath(filepath)
+        warnings = []
 
-        # UNION + ensure 4326
-        geom4326 = union_geom_4326(geojson_obj)
-        if geom4326 is None or geom4326.is_empty:
-            raise ValueError("Geometría vacía o inválida")
+        # Datos ya calculados en el paso 2 (QC)
+        farm_code = normalize_external_code(props.get("farm_code", ""))
+        adm3_code = str(props.get("adm3_code", "")).strip()
+        latitude = props.get("latitude")
+        longitude = props.get("longitude")
+        farm_ha = props.get("farm_ha", 0.0)
 
-        # debug info
-        bounds = geom4326.bounds
+        # Cadena de valor: usar la explícita; si no viene, inferir por carpeta/canal
+        resolved_value_chain = value_chain or infer_value_chain_from_filepath(filepath)
+        external_source = infer_external_source_from_filepath(filepath, resolved_value_chain)
 
-        # centroid y area (usando geod)
-        lat, lon = centroid_wgs84_from_4326(geom4326)
-        farm_ha = area_hectares_from_4326(geom4326)
-
-        adm3_code = find_adm3_code_for_geom(geom4326, adm3_gdf, adm3_code_col)
-        adm3_doc = get_adm3_doc_from_code(adm3_code) if adm3_code else None
-        if not adm3_doc:
+        if not adm3_code:
+            raise ValueError("adm3_code vacío en properties (¿no pasó por QC?)")
+        if resolved_value_chain is None:
             raise ValueError(
-                f"No se encontró Adm3 para el polígono (code={adm3_code}). Bounds={bounds}, area_ha={farm_ha:.4f}"
+                "No se pudo determinar value_chain (ni por parámetro ni por carpeta de canal)."
             )
 
-        # 1) BORRAR SAGARI con este SIT (y polígonos)
-        del_farms, del_polys = delete_sagari_by_sit(code)
-        stats["sagari_deleted_farms"] += del_farms
-        stats["sagari_deleted_polys"] += del_polys
+        # Buscar Adm3 en MongoDB
+        adm3_doc = get_adm3_doc_from_code(adm3_code)
+        if not adm3_doc:
+            raise ValueError(f"No se encontró Adm3 en BD para código '{adm3_code}'")
 
-        # 2) UPSERT del FARM de GEOFARMER por SIT
-        farm = Farm.objects(
-            farm_source=FarmSource.GEOFARMER,
-            ext_id__match={'source': Source.SIT_CODE, 'ext_code': code}
-        ).only("id", "ext_id", "log", "farm_source", "adm3_id").first()
+        geofarmer_id = extract_single_geofarmer_id(geojson_obj)
+
+        # 1) Buscar Farm por GEOFARMER_ID (identidad principal) y por código externo
+        farm_by_geofarmer = Farm.objects(
+            ext_id__match={"source": Source.GEOFARMER_ID, "ext_code": geofarmer_id}
+        ).first()
+
+        farm_by_external = None
+        if farm_code:
+            farm_by_external = Farm.objects(
+                ext_id__match={"source": external_source, "ext_code": farm_code}
+            ).first()
+
+        farm = None
+        # Caso A: ya existe por geofarmer_id -> usar ese siempre
+        if farm_by_geofarmer:
+            farm = farm_by_geofarmer
+            if farm_by_external and str(farm_by_external.id) != str(farm_by_geofarmer.id):
+                warnings.append(
+                    "Código externo ya existe en otro Farm, pero se prioriza match por GEOFARMER_ID."
+                )
+        else:
+            # Caso B: no existe por geofarmer_id, pero existe por código externo
+            if farm_by_external:
+                existing_gf_codes = _farm_ext_codes(farm_by_external, Source.GEOFARMER_ID)
+                if existing_gf_codes and geofarmer_id not in existing_gf_codes:
+                    # Colisión: código externo repetido con geofarmer_id distinto -> NO actualizar ese farm
+                    warnings.append(
+                        "Colisión: código externo repetido con GEOFARMER_ID distinto. "
+                        "Se crea un Farm nuevo para preservar unicidad por geofarmer_id."
+                        f"GEOFARMER_ID existente en BD con códigos externos: {existing_gf_codes}"
+                    )
+                    farm = None
+                else:
+                    farm = farm_by_external
 
         if farm:
-            farm.adm3_id = adm3_doc
-            farm.log.updated = datetime.now()
-            farm.save()
-            action_farm = "actualizado"
-            stats["farm_updates"] += 1
-        else:
-            others = Farm.objects(
-                ext_id__match={'source': Source.SIT_CODE, 'ext_code': code},
-                farm_source__ne=FarmSource.GEOFARMER
-            ).only("id")
-            other_ids = [o.id for o in others]
-            if other_ids:
-                FarmPolygons.objects(farm_id__in=other_ids).delete()
-                Farm.objects(id__in=other_ids).delete()
+            # Farm existente → agregar ext_ids faltantes y actualizar solo si cambia algo
+            existing_codes = {(e.source, e.ext_code) for e in farm.ext_id}
+            changed = False
 
-            log = Log(enable=True, created=datetime.now(), updated=datetime.now())
+            # Robustez: algunos Farms históricos podrían no traer log embebido.
+            if not getattr(farm, "log", None):
+                now = datetime.now()
+                farm.log = Log(enable=True, created=now, updated=now)
+                changed = True
+
+            if (Source.GEOFARMER_ID, geofarmer_id) not in existing_codes:
+                farm.ext_id.append(ExtIdFarm(source=Source.GEOFARMER_ID, ext_code=geofarmer_id))
+                changed = True
+
+            if farm_code and (external_source, farm_code) not in existing_codes:
+                # Si el código externo ya está asociado a otro Farm, no anexarlo
+                # para evitar colisiones de unicidad. Se preserva identidad por GEOFARMER_ID.
+                if not (farm_by_external and str(farm_by_external.id) != str(farm.id)):
+                    farm.ext_id.append(ExtIdFarm(source=external_source, ext_code=farm_code))
+                    changed = True
+
+            if farm.farm_source != FarmSource.GEOFARMER:
+                farm.farm_source = FarmSource.GEOFARMER
+                changed = True
+            if farm.adm3_id != adm3_doc:
+                farm.adm3_id = adm3_doc
+                changed = True
+            if farm.value_chain != resolved_value_chain:
+                farm.value_chain = resolved_value_chain
+                changed = True
+
+            if changed:
+                farm.log.updated = datetime.now()
+                farm.save()
+                action_farm = "actualizado"
+                stats["farm_updates"] += 1
+            else:
+                action_farm = "sin_cambios"
+                stats["farm_no_changes"] += 1
+        else:
+            # Farm nuevo
+            ext_ids = []
+            if farm_code:
+                ext_ids.append(ExtIdFarm(source=external_source, ext_code=farm_code))
+            ext_ids.append(ExtIdFarm(source=Source.GEOFARMER_ID, ext_code=geofarmer_id))
+            log_obj = Log(enable=True, created=datetime.now(), updated=datetime.now())
             farm = Farm(
                 adm3_id=adm3_doc,
-                ext_id=[ExtIdFarm(source=Source.SIT_CODE, ext_code=code)],
+                ext_id=ext_ids,
                 farm_source=FarmSource.GEOFARMER,
-                log=log
+                value_chain=resolved_value_chain,
+                log=log_obj,
             )
             farm.save()
             action_farm = "creado"
             stats["farm_inserts"] += 1
 
-        # 3) REEMPLAZAR POLÍGONOS del farm por el de GEOFARMER
+        # 2) Polígonos: comparar geometría, versionar y manejar activo
         geojson_str = json.dumps(geojson_obj, ensure_ascii=False)
-        existing_polys = FarmPolygons.objects(farm_id=farm).only("id")
-        prev_n = existing_polys.count()
-        if prev_n:
-            FarmPolygons.objects(farm_id=farm).delete()
-            stats["poly_deleted_for_replace"] += prev_n
+        active_poly = FarmPolygons.objects(farm_id=farm, log__enable=True).first()
 
-        new_poly = FarmPolygons(
-            farm_id=farm,
-            geojson=geojson_str,
-            latitude=lat,
-            longitud=lon,
-            farm_ha=farm_ha,
-            radio=None,
-            buffer_inputs=None,
-            log=Log(enable=True, created=datetime.now(), updated=datetime.now())
+        if active_poly:
+            if same_geometry(active_poly.geojson, geojson_obj):
+                action_poly = "sin_cambios"
+                stats["poly_no_changes"] += 1
+                stats["warnings"] += 1
+                warnings.append("Geometría igual a la activa. No se actualiza FarmPolygon.")
+            else:
+                active_poly.log.enable = False
+                active_poly.log.updated = datetime.now()
+                active_poly.save()
+                stats["poly_deactivated"] += 1
+
+                new_poly = FarmPolygons(
+                    farm_id=farm,
+                    geojson=geojson_str,
+                    latitude=latitude,
+                    longitud=longitude,
+                    farm_ha=farm_ha,
+                    radio=None,
+                    buffer_inputs=None,
+                    log=Log(enable=True, created=datetime.now(), updated=datetime.now()),
+                )
+                new_poly.save()
+                action_poly = "versionado"
+                stats["poly_updates"] += 1
+        else:
+            new_poly = FarmPolygons(
+                farm_id=farm,
+                geojson=geojson_str,
+                latitude=latitude,
+                longitud=longitude,
+                farm_ha=farm_ha,
+                radio=None,
+                buffer_inputs=None,
+                log=Log(enable=True, created=datetime.now(), updated=datetime.now()),
+            )
+            new_poly.save()
+            action_poly = "creado"
+            stats["poly_inserts"] += 1
+
+        tipo = "advertencia" if warnings else "info"
+        detail = " | ".join(warnings) if warnings else "Procesado correctamente"
+        _append_report_row(
+            report_rows,
+            filepath=filepath,
+            channel_name=channel_name,
+            value_chain=resolved_value_chain,
+            geofarmer_id=geofarmer_id,
+            farm_code=farm_code,
+            external_source=external_source,
+            tipo=tipo,
+            farm_action=action_farm,
+            poly_action=action_poly,
+            message=detail,
+            farm_id=str(farm.id),
         )
-        new_poly.save()
-        stats["poly_inserts"] += 1
-        action_poly = "creado" if prev_n == 0 else "reemplazado"
 
-        return True, f"SIT={code}: Farm {action_farm}, Polígono {action_poly}, ADM3={adm3_doc.ext_id}"
+        return True, (
+            f"canal={channel_name} | ext={external_source.name}:{farm_code or '-'} | "
+            f"Farm {action_farm}, Polígono {action_poly}, ADM3={adm3_code}, "
+            f"VC={resolved_value_chain.value}"
+        )
 
     except Exception as e:
-        errores.append({"archivo": os.path.basename(filepath), "error": str(e)})
+        error_row = {
+            "archivo": os.path.basename(filepath),
+            "canal": extract_channel_from_filepath(filepath),
+            "value_chain": "",
+            "geofarmer_id": "",
+            "farm_code": "",
+            "external_source": "",
+            "farm_action": "error",
+            "poly_action": "error",
+            "farm_id": "",
+            "tipo": "error",
+            "detalle": str(e),
+        }
+        errores.append(error_row)
+        report_rows.append(error_row)
         return False, f"ERROR {os.path.basename(filepath)}: {e}"
+
 
 # ========== RUNNER ==========
 
-def run(polygons_dir: str, adm3_shp: str, errors_out_dir: str | None = None):
+def run(polygons_dir: str, errors_out_dir: str | None = None, value_chain: ValueChain = None):
+    """
+    Guarda farms GEOFARMER en MongoDB.
+    Lee GeoJSONs del paso 2 (ya enriquecidos con adm3_code, lat, lon, farm_ha).
+    """
     if not os.path.isdir(polygons_dir):
         raise FileNotFoundError(f"No existe la carpeta de polígonos: {polygons_dir}")
-    if not os.path.isfile(adm3_shp):
-        raise FileNotFoundError(f"No existe el shapefile ADM3: {adm3_shp}")
 
-    adm3_gdf, code_col = load_adm3_gdf(adm3_shp)
+    all_files = sorted(str(p) for p in Path(polygons_dir).rglob("*.geojson"))
+    if value_chain:
+        files = [fp for fp in all_files if infer_value_chain_from_filepath(fp) == value_chain]
+    else:
+        files = all_files
 
-    files = [os.path.join(polygons_dir, f) for f in os.listdir(polygons_dir) if f.lower().endswith(".geojson")]
+    if not files:
+        log_print(logger, f"⚠️ No se encontraron GeoJSONs en {polygons_dir}")
+        return
+
     ok = 0
-    errores, logs = [], []
+    errores, report_rows, logs = [], [], []
 
     stats = dict(
-        sagari_deleted_farms=0,
-        sagari_deleted_polys=0,
         farm_inserts=0,
         farm_updates=0,
+        farm_no_changes=0,
         poly_inserts=0,
-        poly_deleted_for_replace=0
+        poly_updates=0,
+        poly_deactivated=0,
+        poly_no_changes=0,
+        warnings=0,
     )
 
-    for fp in tqdm(files, desc="🧭 GEOFARMER + ADM3"):
-        success, msg = upsert_one(fp, adm3_gdf, code_col, errores, stats)
+    for fp in tqdm(files, desc="🧭 GEOFARMER → MongoDB"):
+        success, msg = upsert_one(fp, errores, report_rows, stats, value_chain=value_chain)
         logs.append(msg)
         if success:
             ok += 1
 
     for line in logs:
-        log_print(logger, line)
+        logger.info(line)
 
     log_print(logger, f"✅ Hechos: {ok} | ❌ Errores: {len(errores)}")
     log_print(logger, "—— Resumen —————————————————————————————————")
-    log_print(logger, f"Farms SAGARI eliminados          : {stats['sagari_deleted_farms']}")
-    log_print(logger, f"Polígonos SAGARI eliminados      : {stats['sagari_deleted_polys']}")
     log_print(logger, f"Farms GEOFARMER insertados       : {stats['farm_inserts']}")
-    log_print(logger, f"Farms GEOFARMER actualizados     : {stats['farm_updates']}")
-    log_print(logger, f"Polígonos insertados (GEOFARMER) : {stats['poly_inserts']}")
-    log_print(logger, f"Polígonos previos reemplazados   : {stats['poly_deleted_for_replace']}")
+    log_print(logger, f"Farms actualizados               : {stats['farm_updates']}")
+    log_print(logger, f"Farms sin cambios                : {stats['farm_no_changes']}")
+    log_print(logger, f"Polígonos insertados             : {stats['poly_inserts']}")
+    log_print(logger, f"Polígonos actualizados           : {stats['poly_updates']}")
+    log_print(logger, f"Polígonos desactivados           : {stats['poly_deactivated']}")
+    log_print(logger, f"Polígonos sin cambios            : {stats['poly_no_changes']}")
+    log_print(logger, f"Advertencias                     : {stats['warnings']}")
 
-    if errores and errors_out_dir:
+    if report_rows and errors_out_dir:
         os.makedirs(errors_out_dir, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        out_csv = os.path.join(errors_out_dir, f"errores_geofarmer_adm3_{ts}.csv")
-        pd.DataFrame(errores).to_csv(out_csv, index=False, encoding="utf-8")
-        log_print(logger, f"📄 Archivo de errores: {out_csv}")
+        out_csv = os.path.join(errors_out_dir, f"reporte_geofarmer_save_{ts}.csv")
+        pd.DataFrame(report_rows).to_csv(out_csv, index=False, encoding="utf-8")
+        log_print(logger, f"📄 Archivo de reporte: {out_csv}")
+
 
 if __name__ == "__main__":
-    run(POLYGONS_DIR, ADM3_SHP_PATH, OUTPUT_ERRORS_DIR)
+    connect(db=config['MONGO_DB_NAME'], host=config['MONGO_URI'])
+    parser = argparse.ArgumentParser(description="Guardar farms GEOFARMER en MongoDB")
+    parser.add_argument("--polygons-dir", required=True, help="Carpeta con GeoJSONs validados del paso 2")
+    parser.add_argument("--errors-dir", default=None, help="Carpeta para errores (opcional)")
+    args = parser.parse_args()
+    run(args.polygons_dir, args.errors_dir)
