@@ -36,7 +36,7 @@ jobs:
         run: |
           echo "Running tests..."
           source env/bin/activate
-          pytest -m tests/
+          pytest tests/
 # ------- END ETL PROCCESS -------- #    
 
 # ------- START MERGE PROCCESS -------- #
