@@ -30,14 +30,13 @@ jobs:
           python -m venv env
           source env/bin/activate
           pip install --upgrade pip
-          pip install -r requirements.txt  # Ensure the URL is correct here!
-          pip install pytest
+          pip install -r requirements-dev.txt
 
       - name: Run Tests
         run: |
           echo "Running tests..."
           source env/bin/activate
-          
+          pytest tests/
 # ------- END ETL PROCCESS -------- #    
 
 # ------- START MERGE PROCCESS -------- #
