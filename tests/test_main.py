@@ -1,9 +1,3 @@
-import os
-
-# Variables mínimas para evitar fallos en import de main.py durante collection.
-if not os.getenv("WORKSPACE"):
-    os.environ["WORKSPACE"] = os.getcwd()
-
 import pytest
 from main import main
 from ganabosques_orm.enums.farmsource import FarmSource
