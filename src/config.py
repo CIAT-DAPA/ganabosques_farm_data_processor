@@ -64,6 +64,12 @@ config['GEOFARMER_CHANNELS'] = {
         "EXTERNAL_SOURCE": Source.PRODUCER_ID.value,
         "CLIENT_ID": os.getenv("NACIONAL_CHOCOLATES_CLIENT_ID"),
         "CLIENT_SECRET": os.getenv("NACIONAL_CHOCOLATES_CLIENT_SECRET")
+    },
+    "Negocios_Verdes": {
+        "VALUE_CHAIN": "coffee",
+        "EXTERNAL_SOURCE": Source.PRODUCER_ID.value,
+        "CLIENT_ID": os.getenv("NEGOCIOS_VERDES_CLIENT_ID"),
+        "CLIENT_SECRET": os.getenv("NEGOCIOS_VERDES_CLIENT_SECRET")
     }
 }
 

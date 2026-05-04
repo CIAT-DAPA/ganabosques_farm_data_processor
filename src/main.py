@@ -110,6 +110,14 @@ def run_geofarmer(selected_steps=None, value_chain: ValueChain = None):
     output_api       = os.path.join(geofarmer_path, "01_get_data")
     output_qc        = os.path.join(geofarmer_path, "02_quality_control")
     output_errors    = os.path.join(geofarmer_path, "03_save_farm")
+    selected_companies = None
+    if value_chain is not None:
+        selected_channels = fetch_geofarmer_api._select_channels_by_value_chain(value_chain.value)
+        selected_companies = set(selected_channels.keys())
+        if not selected_companies:
+            raise ValueError(
+                f"No hay canales GeoFarmer configurados para value_chain='{value_chain.value}'."
+            )
 
     # Carpeta compartida de shapefiles (descarga una sola vez)
     shapefiles_dir   = os.path.join(base_path, "shapefiles")
@@ -141,7 +149,12 @@ def run_geofarmer(selected_steps=None, value_chain: ValueChain = None):
     # Paso 2
     if selected_steps is None or 2 in selected_steps:
         log_print(logger, "Paso 2 (GEOFARMER): Control de calidad + ADM3 + centroide…")
-        qc_geofarmer(input_dir=output_api, output_dir=output_qc, adm3_shp=adm3_shp)
+        qc_geofarmer(
+            input_dir=output_api,
+            output_dir=output_qc,
+            adm3_shp=adm3_shp,
+            company_filter=selected_companies,
+        )
 
     # Paso 3
     if selected_steps is None or 3 in selected_steps:

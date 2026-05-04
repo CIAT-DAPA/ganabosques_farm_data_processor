@@ -721,3 +721,46 @@ def test_procesar_records_codigo_ceros_and_sin_geometria(monkeypatch, tmp_path):
     content = err_files[0].read_text(encoding="utf-8")
     assert "solo ceros" in content
     assert "Geometría vacía o inválida" in content
+
+
+def test_procesar_filters_companies_by_company_filter(monkeypatch, tmp_path):
+    in_a = tmp_path / "input" / "Colacteos"
+    in_b = tmp_path / "input" / "OtraEmpresa"
+    out_dir = tmp_path / "output"
+    in_a.mkdir(parents=True)
+    in_b.mkdir(parents=True)
+
+    coords = [[[-74.0, 5.0], [-74.0, 5.1], [-73.9, 5.1], [-73.9, 5.0], [-74.0, 5.0]]]
+    payload = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "properties": {
+                    "farm_id": "GF-1",
+                    "farm_name": "Finca",
+                    "farm_code": "SIT-1",
+                    "centroid": [-74.0, 5.0],
+                },
+                "geometry": {"type": "Polygon", "coordinates": coords},
+            }
+        ],
+    }
+    (in_a / "FARM_ID_GF-1.geojson").write_text(json.dumps(payload), encoding="utf-8")
+    (in_b / "FARM_ID_GF-2.geojson").write_text(json.dumps(payload), encoding="utf-8")
+
+    shp = tmp_path / "adm3.shp"
+    shp.write_text("dummy", encoding="utf-8")
+
+    monkeypatch.setattr(qcg, "_load_adm3_gdf", lambda *_args, **_kwargs: ([], "dummy_col"))
+    monkeypatch.setattr(qcg, "_find_adm3_code", lambda *_args, **_kwargs: "1000")
+
+    qcg.procesar(
+        input_dir=str(tmp_path / "input"),
+        output_dir=str(out_dir),
+        adm3_shp=str(shp),
+        company_filter={"Colacteos"},
+    )
+
+    assert (out_dir / "Colacteos").exists()
+    assert not (out_dir / "OtraEmpresa").exists()
