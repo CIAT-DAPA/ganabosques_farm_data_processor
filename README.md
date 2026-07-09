@@ -126,7 +126,7 @@ GEO_USER=admin
 GEO_PWD=admin
 
 # Name of the GeoServer workspace, which must be created before running the code
-GEO_WORKSPACE=administrative
+GEO_WORKSPACE_ADMIN=administrative
 
 # MongoDB URL enabled 
 MONGO_URI=mongodb://usuario:contraseña@localhost:27017
@@ -136,6 +136,20 @@ MONGO_DB_NAME=midatabase
 
 # Local path where the raw input data is stored.
 DATA=D:/data/sagari
+
+# URL of the Geofarmer API
+GEOFARMER_BASE_URL=https://api-v3.geocitizen.org
+
+# Geofarmer API credentials for each entreprise. These credentials are obtained from the Geofarmer platform and must be set for each enterprise you want to process.
+COLACTEOS_CLIENT_ID=
+
+COLACTEOS_CLIENT_SECRET=
+
+...
+
+NEGOCIOS_VERDES_CLIENT_ID=
+
+NEGOCIOS_VERDES_CLIENT_SECRET=
 ```
 
 ## 📂 Outputs
