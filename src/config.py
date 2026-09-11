@@ -15,7 +15,7 @@ config['URL_GEO'] = os.getenv("URL_GEO")
 config['WORKSPACE'] = os.getenv('WORKSPACE')
 config['GEO_USER'] = os.getenv("GEO_USER")
 config['GEO_PWD'] = os.getenv("GEO_PWD")
-config['GEO_WORKSPACE'] = os.getenv("GEO_WORKSPACE")
+config['GEO_WORKSPACE'] = os.getenv("GEO_WORKSPACE_ADMIN")
 config['GEO_STORE'] = os.getenv("GEO_STORE")
 config['MONGO_URI'] = os.getenv("MONGO_URI")
 config['MONGO_DB_NAME'] = os.getenv("MONGO_DB_NAME")
@@ -64,6 +64,12 @@ config['GEOFARMER_CHANNELS'] = {
         "EXTERNAL_SOURCE": Source.PRODUCER_ID.value,
         "CLIENT_ID": os.getenv("NACIONAL_CHOCOLATES_CLIENT_ID"),
         "CLIENT_SECRET": os.getenv("NACIONAL_CHOCOLATES_CLIENT_SECRET")
+    },
+    "Negocios_Verdes": {
+        "VALUE_CHAIN": "coffee",
+        "EXTERNAL_SOURCE": Source.PRODUCER_ID.value,
+        "CLIENT_ID": os.getenv("NEGOCIOS_VERDES_CLIENT_ID"),
+        "CLIENT_SECRET": os.getenv("NEGOCIOS_VERDES_CLIENT_SECRET")
     }
 }
 
