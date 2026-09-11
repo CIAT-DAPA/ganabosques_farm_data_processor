@@ -464,7 +464,12 @@ def _set_enriched_properties(geojson_obj, adm3_code, latitude, longitude, farm_h
 
 # ========= FUNCIÓN PRINCIPAL =========
 
-def procesar(input_dir: str = None, output_dir: str = None, adm3_shp: str = None):
+def procesar(
+    input_dir: str = None,
+    output_dir: str = None,
+    adm3_shp: str = None,
+    company_filter: set[str] | list[str] | tuple[str, ...] | None = None,
+):
     """
     Control de calidad para GeoJSONs de GeoFarmer (paso 2).
 
@@ -472,6 +477,7 @@ def procesar(input_dir: str = None, output_dir: str = None, adm3_shp: str = None
         input_dir: Carpeta con GeoJSONs del paso 1, organizados por empresa.
         output_dir: Carpeta de salida con GeoJSONs validados, misma estructura.
         adm3_shp: Ruta al shapefile ADM3 para spatial join.
+        company_filter: Nombres de empresas a procesar. Si es None, procesa todas.
     """
     if not input_dir:
         raise ValueError("Se requiere input_dir (directorio con GeoJSONs descargados)")
@@ -499,6 +505,10 @@ def procesar(input_dir: str = None, output_dir: str = None, adm3_shp: str = None
 
     # Descubrir subcarpetas de empresa (primer nivel de subdirectorios)
     empresa_dirs = sorted([d for d in in_path.iterdir() if d.is_dir() and d.name != "_errores"])
+
+    if company_filter is not None:
+        company_filter = {str(c).strip() for c in company_filter if str(c).strip()}
+        empresa_dirs = [d for d in empresa_dirs if d.name in company_filter]
 
     if not empresa_dirs:
         # Si no hay subcarpetas, buscar geojsons directamente
@@ -532,11 +542,12 @@ def procesar(input_dir: str = None, output_dir: str = None, adm3_shp: str = None
                 data = _load_geojson(gj_path)
                 props = _extract_first_properties(data)
 
-                farm_id = str(props.get("farm_id", ""))
+                farm_id = str(props.get("farm_id") or "")
                 if not farm_id:
                     farm_id = extract_geofarmer_code(gj_path.name) or ""
-                farm_name = str(props.get("farm_name", ""))
+                farm_name = str(props.get("farm_name") or "")
                 farm_code = str(props.get("farm_code", "")).strip()
+                adm3_code = str(props.get("adm3_code") or "").strip()
 
                 # 1) Validar código externo presente (advertencia, no bloquea)
                 if not farm_code:
@@ -600,7 +611,19 @@ def procesar(input_dir: str = None, output_dir: str = None, adm3_shp: str = None
                 data = _replace_geometry_in_geojson(data, geom)
 
                 # 4) Buscar código ADM3 vía spatial join
-                adm3_code = _find_adm3_code(geom, adm3_gdf, code_col)
+                if adm3_code:
+                    # Si ya viene en las properties, verificar que exista en el shapefile
+                    adm3_exists = False
+                    try:
+                        adm3_exists = not adm3_gdf[adm3_gdf[code_col] == adm3_code].empty
+                    except Exception:
+                        adm3_exists = False
+
+                    if not adm3_exists:
+                        adm3_code = _find_adm3_code(geom, adm3_gdf, code_col)
+                else:
+                    adm3_code = _find_adm3_code(geom, adm3_gdf, code_col)
+
                 if not adm3_code:
                     sin_adm3 += 1
                     errores_emp.append({
